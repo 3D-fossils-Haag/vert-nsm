@@ -8,7 +8,7 @@ Read the tree written by classification_eval.py:
 
 By default, renders one condition -- the one the published figure reports:
 LOSO (specimen) masking, optimised latents, train split, top-5 diagonal -- and
-writes seven files:
+writes five files:
 
     fig_r_A_position_20.png  fig_r_B_life_history.png
     fig_r_C_broad_taxon.png  fig_r_D_region.png
@@ -28,7 +28,7 @@ rebuilt here; this is the strongest top-5 view the file supports.
 
 Usage
 -----
-    python classif_figures.py --roots ../run_v72                    # the published set
+    python classif_figures.py --roots ../run_v72  --outdir classification/evaluation/paper                # the published set
     python classif_figures.py --roots ../run_v72 --split test --mode top1
     python classif_figures.py --roots ../run_v72 ../run_v73h --extras  # everything
 """

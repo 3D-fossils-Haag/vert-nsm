@@ -6,19 +6,18 @@ Read the tree written by classification_eval.py:
         metrics_summary.csv   report_<category>.csv   metrics.json
         predictions.csv
 
-Writes two files by default:
-
+Writes four files by default:
+    Table_2_classif_eval.csv            top-1 / top-5 accuracy for genus and
+                                        spinal position, LOO vs LOSO
     Table_S3_classification_stats.csv   one row per run x split x eval_level x
                                         latents x level -- the minimum needed to
                                         recompute everything quoted in the paper
-    Table_2_classif_eval.csv            top-1 / top-5 accuracy for genus and
-                                        spinal position, LOO vs LOSO
     Table_S4_classif_by_spec_num.csv    per-class recall vs how much data each
                                         class had, from predictions.csv
     Table_S5_classif_by_spec_spearmans.csv  the correlations behind Table S4
 
-S3 and Table 2 describe every run given, so a copy goes into each run's paper
-directory. S4 and S5 describe one run, so each directory gets its own.
+Table 2 and Table S3 describe every run given, so a copy goes into each run's
+paper directory. S4 and S5 describe one run, --main-root (default run_v72).
 
 Reachable metrics are the ones tabulated: under specimen masking a class with a
 single specimen has no same-label gallery entry left once that specimen is
@@ -28,12 +27,8 @@ the first row of the table and belong in the caption.
 
 Usage
 -----
-    # the two published tables
     python classif_tables.py --roots ../run_v72 ../run_v73h ../run_v73c
 
-    # plus the diagnostic files, into a chosen directory
-    python classif_tables.py --roots ../run_v72 ../run_v73h ../run_v73c \
-        --outdir ./cls_out --extras
 """
 
 import argparse
@@ -49,6 +44,9 @@ import encoder
 from NSM.evaluation import (EVAL_LABELS, RUN_LABELS, SPLIT_ORDER, class_support,
                             correlation_rows, find_results, normalize_labels,
                             write_supplement)
+
+# Main root used to report metrics for Tables S4-S5
+MAIN_ROOT = "run_v72"
 
 # carried through from metrics_summary.csv, in report order
 METRICS = ["n_eval", "n_classes", "n_eligible", "n_reachable_classes",
@@ -272,6 +270,8 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--roots", nargs="+", required=True,
                     help="run directories, e.g. ../run_v72 ../run_v73h ../run_v73c")
+    ap.add_argument("--main-root", default=MAIN_ROOT,
+                    help=f"run Tables S4 and S5 report (default: {MAIN_ROOT})")
     ap.add_argument("--outdir", default=None,
                     help="one directory for the set (default: a copy under each "
                          "<root>/classification/evaluation/paper)")
@@ -296,18 +296,23 @@ def main():
     args = ap.parse_args()
 
     summary = build_summary(args.roots, args.levels, args.quiet)
-    # both tables describe every run given, so the same set goes into each run's
-    # paper directory rather than only the first one's
+
+    # S4 and S5 report one run; Table 2 and S3 cover every root
+    main_root = next((r for r in args.roots
+                      if os.path.basename(r.rstrip("/")) == args.main_root), None)
+    if main_root is None and not args.no_supplement:
+        sys.exit(f"--main-root {args.main_root} not in --roots.")
+
+    # Table 2 and S3 describe every run given, so the same set goes into each
+    # run's paper directory rather than only the first one's
     outdirs = ([args.outdir] if args.outdir else
                [os.path.join(r, "classification", "evaluation", "paper")
                 for r in args.roots])
+
     for i, outdir in enumerate(outdirs):
         written = write_tables(summary, args, outdir, not args.quiet and i == 0)
         if not args.no_supplement:
-            # one directory per run: its S4 and S5 describe that run alone.
-            # A single --outdir instead holds every run in the one pair.
-            roots = [args.roots[i]] if len(outdirs) == len(args.roots) else args.roots
-            written += build_supplement(roots, args, outdir, args.quiet)
+            written += build_supplement([main_root], args, outdir, args.quiet)
         print(f"\nWrote {', '.join(written)} to {outdir}")
 
 if __name__ == "__main__":
