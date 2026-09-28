@@ -1,52 +1,33 @@
 """
-Train a Neural Shape Model (NSM) on vertebrae VTK meshes with selectable loss modes.
-Loads vertebrae meshes from a fixed folder, splits them 80/15/5 into
-train/test/val, builds an SDF dataset, constructs a TriplanarDecoder model,
-and launches one of:
-  - standard DeepSDF training
-  - contrastive DeepSDF training
-  - hierarchy-aware DeepSDF training
+Train a Neural Shape Model (NSM) on vertebrae meshes.
+
+Loads .vtk meshes from ./vertebrae_meshes/, splits them 80/15/5 into
+train/val/test, builds an SDF dataset, and trains a TriplanarDecoder with
+standard, contrastive, or hierarchy-aware DeepSDF loss.
+
 Usage:
-    python train_model.py --run_name my_experiment
-    python train_model.py --run_name my_experiment --contrastive_loss
-    python train_model.py --run_name my_experiment --hierarchy_loss
-Arguments:
-    --run_name TEXT
-        Name for this training run. Controls where model checkpoints,
-        latent codes, and config snapshots are saved. Default: run_v57a
-    --contrastive_loss
-        Enable contrastive loss training loop.
-    --hierarchy_loss
-        Enable hierarchy-aware loss training loop.
-        NOTE: --contrastive_loss and --hierarchy_loss are mutually exclusive.
-Configuration:
-    Training hyperparameters (latent size, learning rate, batch size, etc.)
-    are read from vertebrae_config.json in the current directory.
-    Contrastive mode:
-      Define "contrastive_weight" in config (recommended 0.01).
-      If missing/0 while enabled, it is set to 0.01 with a warning.
-    Hierarchy mode:
-      Define "hierarchy_weight" in config (recommended 0.01).
-      Optional config keys:
-        - "hierarchy_warmup" (default 200)
-        - "hierarchy_margins" (default {0:0.0, 1:1.0, 2:2.0, 3:4.0})
-      If hierarchy_weight is missing/0 while enabled, it is set to 0.01 with a warning.
-    After training, a copy of the resolved config is saved to
-    {run_name}/model_params_config.json for downstream scripts.
-Data:
-    VTK meshes are loaded from ./vertebrae_meshes/*.vtk.
-    SDF point samples are cached to ./nsm_sdf_cache/{run_name}/ so that
-    subsequent runs with the same data skip expensive SDF computation.
-    Set load_cache: true in vertebrae_config.json to reuse cached samples.
-Output:
-    {run_name}/model/                - Model checkpoints (.pth)
-    {run_name}/latent_codes/         - Latent code tensors (.pth)
-    {run_name}/model_params_config.json - Resolved config snapshot
-    ./nsm_sdf_cache/{run_name}/      - SDF sample cache (NPZ files)
-Notes:
-    Set USE_WANDB = True and export WANDB_KEY to enable Weights & Biases logging.
-    Random seed is fixed (seed from config) for reproducible train/test/val split.
-    Monkey-patches pymskt signed_distance_to_mesh to enforce float64 inputs.
+    python train_model.py --run_name my_experiment [--contrastive_loss | --hierarchy_loss]
+    python train_model.py --run_name n30 --splits paper/splits/downsample_30spec.json
+
+Options:
+    --run_name    Name of the output directory. Default: run_v1
+    --splits      JSON of precomputed splits (from paper/build_downsampled_datasets.py),
+                  overriding the random 80/15/5 split.
+
+Hyperparameters come from ./vertebrae_config.json. Contrastive and hierarchy
+modes need contrastive_weight / hierarchy_weight set (0.01 recommended); if
+missing, they default to 0.01 with a warning. Hierarchy mode also accepts
+hierarchy_warmup and hierarchy_margins.
+
+Outputs, under {run_name}/:
+    model/                      Checkpoints (.pth)
+    latent_codes/               Latent codes (.pth)
+    model_params_config.json    Resolved config, including the splits, read by
+                                shape_completion_eval.py and classification_eval.py
+    ./nsm_sdf_cache/{run_name}/  SDF samples, reused when load_cache is true
+
+Set USE_WANDB = True and export WANDB_KEY for W&B logging. The split seed is
+fixed at 42 and the training seed comes from config, so runs are reproducible.
 """
 
 import torch
@@ -74,10 +55,11 @@ with open(path_config, 'r') as f:
     config = json.load(f)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--run_name', type=str, default='run_v57a', help='Run name used for saving model and SDF cache')
+parser.add_argument('--run_name', type=str, default='run_v1', help='Run name used for saving model and SDF cache')
 loss_mode = parser.add_mutually_exclusive_group()
-loss_mode.add_argument("--contrastive_loss", action="store_true", help="Enable contrastive loss training loop.")
-loss_mode.add_argument("--hierarchy_loss", action="store_true", help="Enable hierarchy-aware loss training loop.")
+loss_mode.add_argument("--contrastive_loss", action="store_true", help="Optional: Enable contrastive loss training loop.")
+loss_mode.add_argument("--hierarchy_loss", action="store_true", help="Optional: Enable hierarchy-aware loss training loop.")
+parser.add_argument('--splits', type=str, default=None, help='Optional: JSON of precomputed data splits')  # Load precomputed data splits from build_downsampled_datasets.py for paper analysis
 args = parser.parse_args()
 
 # Set loss mode, if using
@@ -148,66 +130,59 @@ list_test_paths = sorted(all_vtk_files[N_TRAIN + N_VAL:])
 config['test_paths'] = list_test_paths
 config['val_paths'] = list_val_paths
 config['list_mesh_paths'] = list_mesh_paths
+if args.splits: config.update(json.load(open(args.splits))); list_mesh_paths = config['list_mesh_paths']
 
-# Set the seed value!
+# Set the seed value
 torch.manual_seed(config['seed'])
 np.random.seed(config['seed'])
 
-sdf_dataset = SDFSamples(
-    list_mesh_paths=list_mesh_paths,
-    subsample=config["samples_per_object_per_batch"],
-    print_filename=True,
-    n_pts=config["n_pts_per_object"],
-    p_near_surface=config['percent_near_surface'],
-    p_further_from_surface=config['percent_further_from_surface'],
-    sigma_near=config['sigma_near'],
-    sigma_far=config['sigma_far'],
-    rand_function=config['random_function'], 
-    center_pts=config['center_pts'],
-    #scale_all_meshes=config['scale_all_meshes'], #
-    #center_all_meshes=config['center_all_meshes'], #
-    #mesh_to_scale=config['mesh_to_scale'], #
-    norm_pts=config['normalize_pts'],
-    scale_method=config['scale_method'],
-    scale_jointly=config['scale_jointly'],
-    random_seed=config['seed'],
-    reference_mesh=None,
-    verbose=config['verbose'],
-    save_cache=config['cache'],
-    equal_pos_neg=config['equal_pos_neg'],
-    fix_mesh=config['fix_mesh'],
-    load_cache=config['load_cache'],
-    store_data_in_memory=config['store_data_in_memory'],
-    multiprocessing=config['multiprocessing'],
-    n_processes=config['n_processes'],
-)
+# Build the SDF dataset for ground truthing
+sdf_dataset = SDFSamples(list_mesh_paths=list_mesh_paths,
+                         subsample=config["samples_per_object_per_batch"],
+                         print_filename=True,
+                         n_pts=config["n_pts_per_object"],
+                         p_near_surface=config['percent_near_surface'],
+                         p_further_from_surface=config['percent_further_from_surface'],
+                         sigma_near=config['sigma_near'],
+                         sigma_far=config['sigma_far'],
+                         rand_function=config['random_function'], 
+                         center_pts=config['center_pts'],
+                         norm_pts=config['normalize_pts'],
+                         scale_method=config['scale_method'],
+                         scale_jointly=config['scale_jointly'],
+                         random_seed=config['seed'],
+                         reference_mesh=None,
+                         verbose=config['verbose'],
+                         save_cache=config['cache'],
+                         equal_pos_neg=config['equal_pos_neg'],
+                         fix_mesh=config['fix_mesh'],
+                         load_cache=config['load_cache'],
+                         store_data_in_memory=config['store_data_in_memory'],
+                         multiprocessing=config['multiprocessing'],
+                         n_processes=config['n_processes'])
 print('sdf_dataset:', sdf_dataset)
 print('len sdf_dataset', len(sdf_dataset))
 
-triplane_args = {
-    'latent_dim': config['latent_size'],
-    'n_objects': config['objects_per_decoder'],
-    'conv_hidden_dims': config['conv_hidden_dims'],
-    'conv_deep_image_size': config['conv_deep_image_size'],
-    'conv_norm': config['conv_norm'], 
-    'conv_norm_type': config['conv_norm_type'],
-    'conv_start_with_mlp': config['conv_start_with_mlp'],
-    'sdf_latent_size': config['sdf_latent_size'],
-    'sdf_hidden_dims': config['sdf_hidden_dims'],
-    'sdf_weight_norm': config['weight_norm'],
-    'sdf_final_activation': config['final_activation'],
-    'sdf_activation': config['activation'],
-    'sdf_dropout_prob': config['dropout_prob'],
-    'sum_sdf_features': config['sum_conv_output_features'],
-    'conv_pred_sdf': config['conv_pred_sdf'],
-}
-
+# Build the triplanar decoder
+triplane_args = {'latent_dim': config['latent_size'],
+                 'n_objects': config['objects_per_decoder'],
+                 'conv_hidden_dims': config['conv_hidden_dims'],
+                 'conv_deep_image_size': config['conv_deep_image_size'],
+                 'conv_norm': config['conv_norm'], 
+                 'conv_norm_type': config['conv_norm_type'],
+                 'conv_start_with_mlp': config['conv_start_with_mlp'],
+                 'sdf_latent_size': config['sdf_latent_size'],
+                 'sdf_hidden_dims': config['sdf_hidden_dims'],
+                 'sdf_weight_norm': config['weight_norm'],
+                 'sdf_final_activation': config['final_activation'],
+                 'sdf_activation': config['activation'],
+                 'sdf_dropout_prob': config['dropout_prob'],
+                 'sum_sdf_features': config['sum_conv_output_features'],
+                 'conv_pred_sdf': config['conv_pred_sdf']}
 model = TriplanarDecoder(**triplane_args)
 
-train_deep_sdf(
-    config=config,
-    model=model,
-    sdf_dataset=sdf_dataset,
-    use_wandb=False,
-)
-
+# Train the model
+train_deep_sdf(config=config,
+               model=model,
+               sdf_dataset=sdf_dataset,
+               use_wandb=False)
