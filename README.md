@@ -1,3 +1,6 @@
+# Vert-NSM
+Neural shape modelling for biologically-informed shape completion, classification, and geometric morphometric analysis of vertebrate specimens. 
+
 # Introduction
 This code uses generative deep learning models to understand the skeletal anatomy of lizards and some snakes (Squamata). This code is forked and modified from [gattia/NSM](https://github.com/gattia/NSM) following the terms of the [GNU Affero GPL 3.0 License](https://www.gnu.org/licenses/agpl-3.0.en.html). See [Original NSM Documentation](http://anthonygattiphd.com/NSM/). 
 
@@ -266,5 +269,5 @@ This code is forked and modified from [https://github.com/gattia/NSM](https://gi
 ## Citation
 If you use this code or the trained models in your research, please cite this repository
 ```
-Wolcott et al. 2026. “Vertebrate NSM” GitHub repository. https://github.com/3D-fossils-Haag/nsm (accessed YYYY-MM-DD).
+Wolcott et al. 2026. “Vert-NSM” GitHub repository. https://github.com/3D-fossils-Haag/vert-nsm (accessed YYYY-MM-DD).
 ```
