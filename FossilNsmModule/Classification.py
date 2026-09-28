@@ -73,6 +73,7 @@ class ClassificationWidget(FossilNsmCommonWidget, ScriptedLoadableModuleWidget):
         self._fossilLatentPath = None
         self._top5IndicesPath = None
         self._loadedShapeCompletionLatent = None
+        self._scPending = []
         self._bulkResults = []
         self._bulkAllLatentsPath = None
         self._pcaCoords = None
@@ -116,7 +117,10 @@ class ClassificationWidget(FossilNsmCommonWidget, ScriptedLoadableModuleWidget):
         self.loadShapeCompletionButton.connect("clicked(bool)", self.onLoadShapeCompletionResult)
         self.loadShapeCompletionLabel = qt.QLabel("Pick a completed mesh from a previous Shape Completion run to classify it.")
         self.loadShapeCompletionLabel.setWordWrap(True)
+        self.loadShapeCompletionFolderButton = qt.QPushButton("Load Shape Completion Folder (Batch)")
+        self.loadShapeCompletionFolderButton.connect("clicked(bool)", self.onLoadShapeCompletionFolder)
         self.inputLayout.addRow("From Shape Completion:", self.loadShapeCompletionButton)
+        self.inputLayout.addRow("", self.loadShapeCompletionFolderButton)
         self.inputLayout.addRow("", self.loadShapeCompletionLabel)
 
         inferenceLayout.addWidget(self.statusLog)
@@ -388,6 +392,41 @@ class ClassificationWidget(FossilNsmCommonWidget, ScriptedLoadableModuleWidget):
                 "latent optimization.", color="orange")
 
         self.updateRunButton()
+
+    def onLoadShapeCompletionFolder(self):
+        if not self._scPending:
+            path = qt.QFileDialog.getExistingDirectory(
+                None, "Select Folder of Shape Completion Results", self.outputFolderPath or "")
+            if not path:
+                return
+            self._scPending = sorted(glob.glob(os.path.join(path, "**", "*_shape_completion*.vtk"), recursive=True))
+            if not self._scPending:
+                slicer.util.errorDisplay("No '*_shape_completion*.vtk' meshes found in:\n" + path)
+                return
+            self._bulkResults = []
+            self._classificationMode = "sc_batch"
+            self.onLogMessage(
+                "Batch-classifying {} shape completion results (reusing saved latents):\n{}\n\n\n".format(
+                    len(self._scPending), path), color="#4CAF50")
+        meshPath = self._scPending.pop(0)
+        base = os.path.splitext(os.path.basename(meshPath))[0]
+        resultDirectory = os.path.join(self._classificationDir(), base)
+        os.makedirs(resultDirectory, exist_ok=True)
+        self.inputFilePath = meshPath
+        self.inputFileLabel.setText(meshPath)
+        self._allLatentsPath = os.path.join(resultDirectory, "all_latents.npy")
+        self._fossilLatentPath = os.path.join(resultDirectory, "fossil_latent.npy")
+        self._top5IndicesPath = os.path.join(resultDirectory, "top5_indices.npy")
+        workerArgs = [
+            "--input_mesh", meshPath, "--output_dir", resultDirectory,
+            "--iterations", str(self._readIterations() or 1000),
+        ]
+        latentPath = os.path.splitext(meshPath)[0] + "_latent.npy"
+        if os.path.isfile(latentPath):
+            workerArgs.extend(["--fossil_latent", latentPath])
+        self.onLogMessage("[{} left] {}".format(len(self._scPending), os.path.basename(meshPath)))
+        self._runWorker(workerArgs, os.path.join(resultDirectory, base + "_top5.json"),
+                        os.path.join(resultDirectory, base + "_classification.log"))
 
     def _pickExistingFile(self, directory, *names):
         for name in names:
@@ -943,9 +982,30 @@ class ClassificationWidget(FossilNsmCommonWidget, ScriptedLoadableModuleWidget):
         self.classifyFolderButton.setEnabled(self.modelReady())
         if code != 0 or not os.path.isfile(self._classificationResultPath):
             self.onLogMessage("\n\n\nClassification failed (exit code {}).".format(code), color="red")
+            if self._classificationMode == "sc_batch" and self._scPending:
+                self.onLoadShapeCompletionFolder()
             return
         if self._classificationMode == "bulk":
             self._loadBulkResults(self._classificationResultPath)
+            return
+        if self._classificationMode == "sc_batch":
+            with open(self._classificationResultPath, encoding="utf-8") as stream:
+                data = json.load(stream)
+            self._bulkResults.append({
+                "input_name": os.path.basename(self.inputFilePath), "input_path": self.inputFilePath,
+                "matches": data.get("matches", []), "fossil_latent": self._fossilLatentPath,
+                "top5_indices": self._top5IndicesPath})
+            self._bulkAllLatentsPath = self._allLatentsPath
+            self._populateBulkTable()
+            if self._scPending:
+                self.onLoadShapeCompletionFolder()
+            else:
+                summaryPath = os.path.join(self._classificationDir(), "bulk_summary.json")
+                with open(summaryPath, "w", encoding="utf-8") as stream:
+                    json.dump({"results": self._bulkResults, "all_latents": self._allLatentsPath},
+                              stream, indent=2)
+                self._classificationMode = "bulk"
+                self._loadBulkResults(summaryPath)
             return
         with open(self._classificationResultPath, encoding="utf-8") as stream:
             data = json.load(stream)
