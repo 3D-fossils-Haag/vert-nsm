@@ -39,7 +39,7 @@ bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
 Computes mean ± SD and median [IQR] Chamfer distance for five shape-completion models across train, validation, and test splits.
 
 **Inputs**
-Requires the following outputs from first running shape_completion_eval.py: 
+Chamfer CSVs from `shape_completion_eval.py` for the five models (baseline, encoder, encoder + refinement, hierarchy, contrastive), one per split(`{split}` = `train`, `val`, `test`):
 - `shape_completion_eval/v72_{split}_chamfer.csv`
 - `shape_completion_eval/v72_encoder_{split}_chamfer.csv`
 - `shape_completion_eval/v72_encoder_{split}_chamfer_refine.csv`
@@ -80,7 +80,8 @@ Generates Chamfer-distance distributions, a train/validation/test generalization
 Reads evaluation results from `classification_eval.py` and summarizes Top-1 and Top-5 classification performance for genus and normalized spinal position (20% bins) under leave-one-vertebra-out (LOO) and leave-one-specimen-out (LOSO) masking. It also produces per-class recall and sample-size correlation tables.
 
 **Inputs**
-Requires the following outputs from first running classification_eval.py: 
+Prediction metrics CSVs/JSONs from `classification_eval.py` for every model passed to `--roots` (run_v72, run_v73h, run_v73c), and every condition evaluated (`{split}` = `train`, `val`, `test`; `{eval_level}` = `loo`, `specimen`, `species`, `genus`; `{latents}` = `base` or `latent_opt`):
+
 - `<run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/predictions.csv`
 - `<run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/metrics_summary.csv`
 - `<run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/metrics.json`
@@ -93,11 +94,7 @@ Requires the following outputs from first running classification_eval.py:
 
 **Run**
 
-    # Published tables
-    python classification_tables.py --roots ../run_v72 ../run_v73h ../run_v73c
-
-    # All splits and diagnostic outputs
-    python classification_tables.py --roots ../run_v72 ../run_v73h ../run_v73c --outdir ./cls_out --extras
+    python classification_tables.py --roots ../run_v72 ../run_v73h ../run_v73c --outdir classification/evaluation/paper/
 
 ---
 
@@ -118,11 +115,10 @@ Requires the following outputs from first running classification_eval.py:
 - `fig_r_C_broad_taxon.png`
 - `fig_r_D_region.png`
 - `fig_r_colorbar.png`
-- Optional PDF versions with `--pdf`
 
 **Run**
 
-    python classification_figures.py --roots ../run_v72
+    python classification_figures.py --roots ../run_v72 --outdir classification/evaluation/paper/
 
 ---
 
@@ -163,7 +159,7 @@ Computes and visualizes PCA (PC1–PC2 and PC3–PC4), t-SNE, and UMAP for spars
 - `{RUN}_pca_3v4_comparison.png`
 - `{RUN}_tsne_comparison.png`
 - `{RUN}_umap_comparison.png`
-- Combined publication panel
+- Combined publication panel (static `.png` and interactive `.html`)
 - `*_points_for_stats.csv` files containing PCA, t-SNE, and UMAP coordinates
 
 ---
