@@ -4,7 +4,11 @@ processed data and writes outputs into a designated directory.
 
 ## Requirements
 
-Run these analyses in an environment with the `NSM` package and its dependencies installed, as described in the repository-level `README.md`.
+Run these analyses in an environment with the `NSM` package and its dependencies installed, as described in the repository-level `README.md`. 
+
+Command-line scripts include a **Run** block below. Notebooks are run top to
+bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
+`CKPT`, output directory).
 
 ## At a Glance
 
@@ -16,12 +20,14 @@ Run these analyses in an environment with the `NSM` package and its dependencies
 | `classification_figures.py` | Figure R |
 | `life_hist_grid_fig.ipynb` | Figure F |
 | `PCA_tSNE_UMAP_paper_figs.ipynb` | Figure Y |
-| `LDA_paper_fig.ipynb` | Figure S |
+| `LDA_paper_fig.ipynb` | Figure S ; Table S8 |
 | `GMM_spearman_mesh_grid.ipynb` | Figures K and M |
-| `morphol_disparity_lms_latents.ipynb` | Figures T and Su |
+| `morphol_disparity_lms_latents.ipynb` | Figures T and Su ; Tables S6-S7|
 | `latent_interp_figs.ipynb` | Figures W and Sd |
 | `conf_matr_schaema.ipynb` | Figure N schematic element |
-| `classify_vertebrae_inference_fig.py` | Figure N inference panel(s) |
+| `classify_vertebrae_inference_fig.py` | Figure N schematic element |
+| `network_architecture_icons.ipynb` | Figure X schematic elements |
+| `build_downsampled_datasets.py` | Tables S9-S10 |
 
 ## Analysis Files
 
@@ -33,14 +39,14 @@ Run these analyses in an environment with the `NSM` package and its dependencies
 Computes mean ± SD and median [IQR] Chamfer distance for five shape-completion models across train, validation, and test splits.
 
 **Inputs**
-
+Requires the following outputs from first running shape_completion_eval.py: 
 - `shape_completion_eval/v72_{split}_chamfer.csv`
 - `shape_completion_eval/v72_encoder_{split}_chamfer.csv`
 - `shape_completion_eval/v72_encoder_{split}_chamfer_refine.csv`
 - `shape_completion_eval/v73h_{split}_chamfer.csv`
 - `shape_completion_eval/v73c_{split}_chamfer.csv`
 
-**Output:** `Table_2_shp_compl_eval.csv`
+**Output:** `Table_1_shp_compl_eval.csv`
 
 **Run**
 
@@ -74,15 +80,14 @@ Generates Chamfer-distance distributions, a train/validation/test generalization
 Reads evaluation results from `classification_eval.py` and summarizes Top-1 and Top-5 classification performance for genus and normalized spinal position (20% bins) under leave-one-vertebra-out (LOO) and leave-one-specimen-out (LOSO) masking. It also produces per-class recall and sample-size correlation tables.
 
 **Inputs**
-
+Requires the following outputs from first running classification_eval.py: 
 - `<run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/predictions.csv`
 - `<run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/metrics_summary.csv`
 - `<run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/metrics.json`
 
 **Outputs**
-
+- `Table_2_classif_eval.csv` — Top-1 and Top-5 accuracy for `genus` and `position_20`
 - `Table_S3_classification_stats.csv` — metrics across runs, splits, masking schemes, latent conditions, and levels
-- `Table_2_classif_eval.csv` — Top-1 and Top-5 accuracy for genus and `position_20`
 - `Table_S4_classif_by_spec_num.csv` — per-class recall and sample size
 - `Table_S5_classif_by_spec_spearmans.csv` — correlations between performance and support
 
@@ -103,8 +108,8 @@ Reads evaluation results from `classification_eval.py` and summarizes Top-1 and 
 Renders Top-5 LOSO confusion matrices for normalized spinal position, life-history strategy, broad taxonomic group, and spinal region. The default configuration uses optimized latents, the training split, specimen-level masking, and Top-5 recall on the diagonal.
 
 **Input**
-
-- `<run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/predictions.csv`
+Requires the following outputs from first running classification_eval.py: 
+- `<run>/classification/evaluation/train/train_specimen_latent_opt/predictions.csv`
 
 **Outputs**
 
@@ -165,7 +170,7 @@ Computes and visualizes PCA (PC1–PC2 and PC3–PC4), t-SNE, and UMAP for spars
 
 ### `LDA_paper_fig.ipynb`
 
-**Produces:** Figure S
+**Produces:** Figure S, Table S8
 
 Applies linear discriminant analysis to sparse landmarks, dense correspondences, and NSM latents at 90%, 95%, and 99% variance thresholds. Produces a 3 × 3 life-history visualization grid and calculates MANOVA statistics.
 
@@ -178,7 +183,7 @@ Applies linear discriminant analysis to sparse landmarks, dense correspondences,
 **Outputs**
 
 - `{RUN}_lda_trait_3x3_thresholds.png`
-- MANOVA summary CSV
+- `{RUN}_lda_trait_accuracy_table.csv`
 
 ---
 
@@ -263,7 +268,7 @@ Creates a synthetic five-class, row-normalized confusion-matrix schematic for us
 
 **Produces:** Figure N inference panel(s)
 
-Encodes a novel vertebral mesh into NSM latent space through latent optimization, identifies the five nearest training latents using cosine similarity, and displays the query and nearest neighbors in PCA or t-SNE latent space.
+Encodes a novel vertebral mesh into NSM latent space through latent optimization, identifies the five nearest training latents using cosine similarity, and displays the query and nearest neighbors in PCA or t-SNE latent space. Rendered with large points to be optimized for a small schaematic panel of a figure.
 
 **Inputs**
 
@@ -279,9 +284,49 @@ Encodes a novel vertebral mesh into NSM latent space through latent optimization
 
 ---
 
+### `network_architecture_icons.ipynb`
+
+**Produces:** Figure X schematic elements
+
+Generates the triplanar, CNN, MLP, and loss icons used to assemble the network architecture diagram.
+
+**Input:** None; the elements are generated within the notebook.
+
+**Output:** 
+- `svg_pieces/10_scene_3d.png`
+- `svg_pieces/11_faceon.png`
+- `svg_pieces/13_triplanar_corner.png`
+- `svg_pieces/cnn_blocks.svg`
+- `svg_pieces/dense_blocks.svg`
+- `svg_pieces/global_z.svg`
+- `svg_pieces/loss.svg`
+- `svg_pieces/mlp_blocks.svg`
+- `svg_pieces/plane_features.svg`
+- `svg_pieces/reshape_2x2.svg`
+- `svg_pieces/triplanar.svg`
+
+---
+
+### `build_downsampled_datasets.py`
+
+**Produces:** Tables S9-S10
+
+Builds taxon-stratified downsampled datasets (10/30/50/70 specimens) for the sampling-effort experiments, to show how performance degrades as sample size decreases.
+
+**Input:** folder used to train the final models (vertebrae_meshes/*)
+
+**Output:** 
+- `splits/downsample_10spec.json`
+- `splits/downsample_30spec.json`
+- `splits/downsample_50spec.json`
+- `splits/downsample_70spec.json`
+- 
+Pass a split file to training with `python train_model.py --splits splits/downsample_10spec.json`.
+
+---
+
 ## Notes
 
-- `classification_tables.py` and `classification_figures.py` require the result-tree files written by the upstream `classification_eval.py` workflow.
-- Shape-completion scripts require Chamfer-distance CSV files produced by the upstream shape-completion evaluation workflow.
-- Model weights and configuration files for reported models are available at https://huggingface.co/BioVisionLab/models.
-- Interactive 3D renderings are available at https://3d-fossils-haag.github.io/vert-nsm-figs/.
+- Model weights and configuration files for reported models: https://huggingface.co/BioVisionLab/models.
+- Final training dataset (`vertebrae_meshes.zip`), along with meshes, sparse landmarks, dense correspondences, and the atlas SSM produced by MorphoWeave in 3D Slicer: https://huggingface.co/datasets/BioVisionLab/train_data/tree/main
+- Interactive 3D renderings are available at https://3d-fossils-haag.github.io/vert-nsm-figs/
