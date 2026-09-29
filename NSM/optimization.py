@@ -24,7 +24,12 @@ def pca_initialize_latent(mean_latent, latent_codes, top_k=10):
     # Convert to numpy
     latent_np = latent_codes.detach().cpu().numpy()
     mean_np = mean_latent.detach().cpu().numpy().squeeze()
-    pca = PCA(n_components=latent_np.shape[1])
+    # Cap for when less samles than latent dims
+    n_samples, n_features = latent_np.shape
+    max_components = max(1, min(n_samples - 1, n_features))
+    top_k = min(top_k, max_components)
+    # PCA
+    pca = PCA(n_components=top_k)
     pca.fit(latent_np)
     # Sample along top-K PCs
     top_components = pca.components_[:top_k]  # (K, D)
