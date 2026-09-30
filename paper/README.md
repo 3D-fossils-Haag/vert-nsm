@@ -12,6 +12,7 @@ bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
 
 ## At a Glance
 
+**Manuscript figures and tables**
 | File | Manuscript output |
 | --- | --- |
 | `shape_completion_table.py` | Table 1 |
@@ -28,6 +29,16 @@ bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
 | `classify_vertebrae_inference_fig.py` | Figure N schematic element |
 | `network_architecture_icons.ipynb` | Figure X schematic elements |
 | `build_downsampled_datasets.py` | Tables S9-S10 |
+
+**Interactive 3D renderings, plots, and videos** on the [vert-nsm-figs GitHub Pages site](https://3d-fossils-haag.github.io/vert-nsm-figs/)
+
+| File | Interactive output |
+| --- | --- |
+| `render_landmarks.ipynb` | Atlas 3D viewers: `mean_landmarks.html`, `dense_correspondences.html`, `lollipop_vecs.html` |
+| `../inspect_data/inspect_meshes_video.py` | Mesh inspection video: `inspect_meshes_4panel.mp4` |
+| `../data_viz/pc_video_4way.py` | PC1–PC5 traversal videos (±1.5 SD): `pc{1..5}_4way_256p_1.5xpc.mp4` |
+| `PCA_tSNE_UMAP_paper_figs.ipynb` | Per-representation embeddings (NSM latents, 28 sparse landmarks, 4,943 dense correspondences): `run_v72_{pca_1v2,pca_3v4,tSNE,UMAP}.html`, `run_v72_*_28lmks.html`, `run_v72_*_4943lmks.html`<br>Comparison panels by broad taxon: `run_v72_{pca_1v2,pca_3v4,tsne,umap}_comparison.html`<br>Comparison panels by life history: `run_v72_{pca_1v2,pca_3v4,tsne,umap}_comparison_trait.html` |
+
 
 ## Analysis Files
 
