@@ -16,18 +16,18 @@ bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
 | File | Manuscript output |
 | --- | --- |
 | `shape_completion_table.py` | Table 1 |
-| `shape_completion_figures.py` | Figure L |
 | `classification_tables.py` | Table 2; Tables S3–S5 |
-| `classification_figures.py` | Figure R |
-| `life_hist_grid_fig.ipynb` | Figure F |
-| `PCA_tSNE_UMAP_paper_figs.ipynb` | Figure Y |
-| `LDA_paper_fig.ipynb` | Figure S ; Table S8 |
-| `GMM_spearman_mesh_grid.ipynb` | Figures K and M |
-| `morphol_disparity_lms_latents.ipynb` | Figures T and Su ; Tables S6-S7|
-| `latent_interp_figs.ipynb` | Figures W and Sd |
-| `conf_matr_schaema.ipynb` | Figure N schematic element |
-| `classify_vertebrae_inference_fig.py` | Figure N schematic element |
-| `network_architecture_icons.ipynb` | Figure X schematic elements |
+| `life_hist_grid_fig.ipynb` | Figure 1 |
+| `network_architecture_icons.ipynb` | Figure 2 schematic elements |
+| `conf_matr_schaema.ipynb` | Figure 3 schematic element |
+| `classify_vertebrae_inference_fig.py` | Figure 3 schematic element |
+| `shape_completion_figures.py` | Figure 4 |
+| `classification_figures.py` | Figure 5 |
+| `PCA_tSNE_UMAP_paper_figs.ipynb` | Figure 6 |
+| `LDA_paper_fig.ipynb` | Figure 7 ; Table S8 |
+| `GMM_spearman_mesh_grid.ipynb` | Figures 8 and 9 |
+| `morphol_disparity_lms_latents.ipynb` | Figures 10 and S1 ; Tables S6-S7|
+| `latent_interp_figs.ipynb` | Figures 11 and S2 |
 | `build_downsampled_datasets.py` | Tables S9-S10 |
 
 **Interactive 3D renderings, plots, and videos** on the [vert-nsm-figs GitHub Pages site](https://3d-fossils-haag.github.io/vert-nsm-figs/)
@@ -66,7 +66,7 @@ Chamfer CSVs from `shape_completion_eval.py` for the five models (baseline, enco
 
 ### `shape_completion_figures.py`
 
-**Produces:** Figure L (A–C)
+**Produces:** Figure 4 (A–C)
 
 Generates Chamfer-distance distributions, a train/validation/test generalization-gap plot, and an accuracy–speed tradeoff plot for the Baseline, Encoder, Encoder + refinement, Hierarchy, and Contrastive models.
 
@@ -111,7 +111,7 @@ Prediction metrics CSVs/JSONs from `classification_eval.py` for every model pass
 
 ### `classification_figures.py`
 
-**Produces:** Figure R (A–D)
+**Produces:** Figure 5 (A–D)
 
 Renders Top-5 LOSO confusion matrices for normalized spinal position, life-history strategy, broad taxonomic group, and spinal region. The default configuration uses optimized latents, the training split, specimen-level masking, and Top-5 recall on the diagonal.
 
@@ -135,7 +135,7 @@ Requires the following outputs from first running classification_eval.py:
 
 ### `life_hist_grid_fig.ipynb`
 
-**Produces:** Figure F
+**Produces:** Figure 1
 
 Renders exemplar vertebrae for six life-history strategies—arboreal, burrowing, grass-swimmer, saxicolous, terrestrial, and snake—in lateral and posterior views. Sparse landmark locations are overlaid as red spheres and renders are assembled into a 4 × 3 panel.
 
@@ -152,7 +152,7 @@ Renders exemplar vertebrae for six life-history strategies—arboreal, burrowing
 
 ### `PCA_tSNE_UMAP_paper_figs.ipynb`
 
-**Produces:** Figure Y
+**Produces:** Figure 6
 
 Computes and visualizes PCA (PC1–PC2 and PC3–PC4), t-SNE, and UMAP for sparse landmarks, dense correspondences, and NSM latent codes. Points are colored by broad taxonomic group; coordinates are also exported for downstream analyses.
 
@@ -177,7 +177,7 @@ Computes and visualizes PCA (PC1–PC2 and PC3–PC4), t-SNE, and UMAP for spars
 
 ### `LDA_paper_fig.ipynb`
 
-**Produces:** Figure S, Table S8
+**Produces:** Figure 7, Table S8
 
 Applies linear discriminant analysis to sparse landmarks, dense correspondences, and NSM latents at 90%, 95%, and 99% variance thresholds. Produces a 3 × 3 life-history visualization grid and calculates MANOVA statistics.
 
@@ -219,7 +219,7 @@ Computes pairwise Spearman rank correlations between principal-component scores 
 
 ### `morphol_disparity_lms_latents.ipynb`
 
-**Produces:** Figure T and Figure Su
+**Produces:** Figure 10 and Figure S1
 
 Compares morphological disparity across lizard families and life-history categories using sparse landmarks and NSM latents reduced to 84 principal components. Ranks are compared between representations with dumbbell plots.
 
@@ -241,7 +241,7 @@ Compares morphological disparity across lizard families and life-history categor
 
 ### `latent_interp_figs.ipynb`
 
-**Produces:** Figure W and Figure Sd
+**Produces:** Figure 11 and Figure S2
 
 Interpolates linearly between mean latent codes or PointNet-encoded mesh endpoints, decodes each interpolation step to a surface mesh, renders lateral and posterior views, and assembles the images into a figure. Absolute mesh paths can be used as endpoints to encode fossil specimens.
 
@@ -261,7 +261,7 @@ Interpolates linearly between mean latent codes or PointNet-encoded mesh endpoin
 
 ### `conf_matr_schaema.ipynb`
 
-**Produces:** Figure N schematic element
+**Produces:** Figure 3 schematic element
 
 Creates a synthetic five-class, row-normalized confusion-matrix schematic for use in a methods or inference illustration.
 
@@ -273,7 +273,7 @@ Creates a synthetic five-class, row-normalized confusion-matrix schematic for us
 
 ### `classify_vertebrae_inference_fig.py`
 
-**Produces:** Figure N inference panel(s)
+**Produces:** Figure 3 inference panel(s)
 
 Encodes a novel vertebral mesh into NSM latent space through latent optimization, identifies the five nearest training latents using cosine similarity, and displays the query and nearest neighbors in PCA or t-SNE latent space. Rendered with large points to be optimized for a small schaematic panel of a figure.
 
@@ -293,7 +293,7 @@ Encodes a novel vertebral mesh into NSM latent space through latent optimization
 
 ### `network_architecture_icons.ipynb`
 
-**Produces:** Figure X schematic elements
+**Produces:** Figure 2 schematic elements
 
 Generates the triplanar, CNN, MLP, and loss icons used to assemble the network architecture diagram.
 
