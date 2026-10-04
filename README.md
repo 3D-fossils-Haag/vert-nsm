@@ -73,6 +73,34 @@ run_v1/
 
 ./nsm_sdf_cache/run_v1/         # SDF samples, reused when load_cache is true
 ```
+
+**Optional: Train PointNet Encoder for fast inference**   
+The encoder is distilled from a trained model, so you build one directly from an
+existing `run_` folder (which holds `model_params_config.json`,
+`model/<epoch>.pth`, and `latent_codes/<epoch>.pth`):
+
+```bash
+conda activate NSM
+cd NSM/nsm
+
+# 1. Build the training set: for each latent code, marching-cubes the decoder
+#    into a surface and store the (surface_points -> latent) pair.
+python encoder/generate_latent_dataset.py \
+    --config run_v44/model_params_config.json \
+    --model run_v44/model/3000.pth \
+    --latent_codes run_v44/latent_codes/3000.pth \
+    --out encoder/data/latent_surface_dataset.pt
+
+# 2. Train the encoder (random cropping teaches partial -> full completion).
+python encoder/train_encoder.py \
+    --data encoder/data/latent_surface_dataset.pt \
+    --out encoder/checkpoints/encoder.pt
+```
+
+Point the Slicer module's "Fast Mode (Encoder)" option at the resulting
+`encoder/checkpoints/encoder.pt`. Retrain the encoder whenever the underlying
+model/latent codes change, since it is specific to that decoder.
+
 ## Inference
 
 ### 1. Load a trained model
