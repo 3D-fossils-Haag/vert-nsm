@@ -1,26 +1,36 @@
 """
-Bulk encode train, validation, and test sets into latent space for classification evaluation.
+Bulk encode a dataset split into latent space for classification evaluation.
 
-# Example usage:
-#   conda activate NSM
-#   cd NSM/nsm
-#   python encode_latents.py \
-#       --model_root run_v72 \
-#       --output_dir classification/evaluation/encoded_latents \
-#       --dataset_split val
-#
-#   python encode_latents.py \
-#       --model_root run_v72 \
-#       --output_dir classification/evaluation/encoded_latents \
-#       --dataset_split val \
-#       --iterations 1000 \
-#       --learning_rate 1e-3
+Each mesh gets its own latent by optimization against the trained decoder
+(auto-decoder inference), rather than reusing the latent codes learned during
+training. Writes <output_dir>/latent_codes_<tag or dataset_split>.pth, a
+[N, latent_size] tensor whose row order matches the mesh list it encoded, for
+classification_eval.py --encoded_latents to read.
 
+Usage
+-----
+Main analysis (run per model: run_v72, run_v73h, run_v73c):
+
+python encode_latents_for_eval.py --model_root run_v72 --ckpt 2500 --output_dir classification/evaluation/encoded_latents --dataset_split train
+python encode_latents_for_eval.py --model_root run_v72 --ckpt 2500 --output_dir classification/evaluation/encoded_latents --dataset_split val
+python encode_latents_for_eval.py --model_root run_v72 --ckpt 2500 --output_dir classification/evaluation/encoded_latents --dataset_split test
+
+Downsample experiment, common validation meshes from build_downsample_val_ds.py
+(run per model: run_10spec, run_30spec, run_50spec, run_70spec, run_v72):
+
+ python encode_latents_for_eval.py --model_root run_10spec --ckpt 3000 --output_dir classification/evaluation/encoded_latents --dataset_split val --mesh_list common_eval_meshes.json --tag downsample_val_common
+
+Note: 
+Optimization length and step size are --iterations (default 1000) and
+--learning_rate (default 1e-3); keep them identical across models being compared.
+Pass classification_eval.py the same --dataset_split and --tag so it finds the
+file and lists the queries in the same order.
 """
 import argparse
 import os
 import sys
 import numpy as np
+import json
 
 import torch
 import pymskt.mesh.meshes as meshes
@@ -33,36 +43,17 @@ from NSM.optimization import get_top_k_pcs, optimize_latent, build_sdf_dataset
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
 meshes.Mesh.point_coords = property(fixed_point_coords)
 
-def resolve_model_root(root_dir):
-    config = os.path.join(root_dir, "model_params_config.json")
-    model_dir = os.path.join(root_dir, "model")
-    latent_dir = os.path.join(root_dir, "latent_codes")
-
-    missing = []
-    if not os.path.isfile(config):
-        missing.append("model_params_config.json")
-    if not os.path.isdir(model_dir):
-        missing.append("model/")
-    if not os.path.isdir(latent_dir):
-        missing.append("latent_codes/")
+def resolve_model_root(root_dir, ckpt):
+    paths = {"model_params_config.json": os.path.join(root_dir, "model_params_config.json"),
+             "model":                    os.path.join(root_dir, "model", f"{ckpt}.pth"),
+             "latent_codes":             os.path.join(root_dir, "latent_codes", f"{ckpt}.pth")}
+    missing = [k for k, v in paths.items() if not os.path.isfile(v)]
     if missing:
-        raise ValueError("Invalid model package. Missing: {}".format(missing))
-
-    model_files = sorted([f for f in os.listdir(model_dir) if f.endswith(".pth")])
-    latent_files = sorted([f for f in os.listdir(latent_dir) if f.endswith(".pth")])
-
-    if not model_files:
-        raise ValueError("No .pth file found in model/")
-    if not latent_files:
-        raise ValueError("No .pth file found in latent_codes/")
-
-    model_path = os.path.join(model_dir, model_files[-1])
-    latent_path = os.path.join(latent_dir, latent_files[-1])
-
-    return config, model_path, latent_path
+        raise ValueError(f"{root_dir}: missing {missing} (ckpt {ckpt})")
+    return tuple(paths.values())
 
 def _load_model_bundle(args, device):
-    config_path, model_path, latent_path = resolve_model_root(args.model_root)
+    config_path, model_path, latent_path = resolve_model_root(args.model_root, args.ckpt)
     config = load_config(config_path)
     print("Classification model root: {}".format(args.model_root))
     print("Classification config: {}".format(config_path))
@@ -124,16 +115,21 @@ def encode_datasets(args):
     # Encode files fromd dataset split (train, val, test)
     ds_split_keys = {"train": "list_mesh_paths", "val": "val_paths", "test": "test_paths"}
     split_key = ds_split_keys[args.dataset_split]
-    ds_paths = config[split_key]
-    _encode_split(split_key, ds_paths, config, model, latent_codes, mean_latent, top_k_reg, device, args)
+    ds_paths = json.load(open(args.mesh_list)) if args.mesh_list else config[split_key]
+    _encode_split(args.tag or args.dataset_split, ds_paths, config, model, latent_codes, mean_latent, top_k_reg, device, args)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Encode train, val, and test sets into latents for evaluation.")
     parser.add_argument("--model_root", required=True, help="Path to the model directory (e.g. run_vXX)")
+    parser.add_argument("--ckpt", required=True, help="Numeric checkpoint (Ex: 3000)")
     parser.add_argument("--output_dir", required=True, help="Directory to save latent_codes_{train,val,test}.pth (e.g. classification/evaluation/encoded_latents)")
     parser.add_argument("--dataset_split", choices=["train", "val", "test"])
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--mesh_list", default=None,
+                        help="JSON list of mesh paths to encode instead of the split")
+    parser.add_argument("--tag", default=None,
+                        help="output name, latent_codes_<tag>.pth (default: dataset split)")
     args = parser.parse_args()
     
     encode_datasets(args)
