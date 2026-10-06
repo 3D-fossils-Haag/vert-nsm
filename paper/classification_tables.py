@@ -1,8 +1,8 @@
 """Manuscript tables from the classification results.
 
-Read the tree written by classification_eval.py:
- 
-    <run>/classification/evaluation/<split>/<split>_<eval_level>_<latents>/
+Reads the tree written by classification_eval.py:
+
+    <run>/classification/evaluation/<tag or split>/<split>_<eval_level>_<latents>/
         metrics_summary.csv   report_<category>.csv   metrics.json
         predictions.csv
 
@@ -16,37 +16,45 @@ Writes four files by default:
                                         class had, from predictions.csv
     Table_S5_classif_by_spec_spearmans.csv  the correlations behind Table S4
 
-Table 2 and Table S3 describe every run given, so a copy goes into each run's
-paper directory. S4 and S5 describe one run, --main-root (default run_v72).
-
-Reachable metrics are the ones tabulated: under specimen masking a class with a
-single specimen has no same-label gallery entry left once that specimen is
-hidden, so its recall is forced to 0. That also means LOO and LOSO choose among
-different numbers of classes, so n and the reachable-class count are emitted in
-the first row of the table and belong in the caption.
+Table 2 and Table S3 cover every run given. S4 and S5 cover run_v72 only and go
+in a subfolder of --outdir named for it.
 
 Usage
 -----
-    python classif_tables.py --roots ../run_v72 ../run_v73h ../run_v73c
+Main analysis
 
+python classification_tables.py --roots ../run_v72 ../run_v73h ../run_v73c
+
+Downsample experiment, from the common validation meshes:
+
+python classification_tables.py --roots ../run_10spec ../run_30spec ../run_50spec ../run_70spec ../run_v72 \
+    --table-splits downsample_val_common --no-supplement \
+    --name Table_downsample_classif.csv --outdir ../downsample_tables
+    
+Only the reachable metrics are tabulated: under specimen masking a class with a
+single specimen has no same-label gallery entry left once that specimen is
+hidden, so its recall is forced to 0. LOO and LOSO therefore choose among
+different numbers of classes, which is why each cell carries its own n and
+class count.
 """
 
 import argparse
 import json
 import os
 import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-import encoder
 from NSM.evaluation import (EVAL_LABELS, RUN_LABELS, SPLIT_ORDER, class_support,
                             correlation_rows, find_results, normalize_labels,
                             write_supplement)
 
 # Main root used to report metrics for Tables S4-S5
 MAIN_ROOT = "run_v72"
+
+# written relative to NSM/nsm/paper
+OUTDIR = "../classification_tables"
 
 # carried through from metrics_summary.csv, in report order
 METRICS = ["n_eval", "n_classes", "n_eligible", "n_reachable_classes",
@@ -59,7 +67,7 @@ LEVELS = ["family", "genus", "species", "region", "position_10", "position_20",
 
 # the paper table: which levels, and how they are titled in it
 TABLE_LEVELS = {"genus": "Genus", "position_20": "Spinal position (20% bins)"}
-TABLE_SPLITS = ("train", "test", "val")
+TABLE_SPLITS = ("train", "test", "val") 
 TABLE_EVALS = ("loo", "specimen")
 TABLE_LATENTS = "latent_opt"
 
@@ -148,120 +156,55 @@ def paper_table(summary, levels=TABLE_LEVELS, latents=TABLE_LATENTS,
         known = [c for c in RUN_LABELS.values() if c in p.index]
         conditions = known + [c for c in p.index if c not in known]
 
-        rows = [{"Level": level_label, "Condition": "(N, classes)",
-                 **{name: f"n={int(p[(N, *k)].max())}, "
-                          f"{int(p[(NCLS, *k)].max())} cls"
-                    for name, k in cols.items()}}]
-        rows += [{"Level": level_label, "Condition": c,
-                  **{name: f"{p.loc[c, (TOP1, *k)] * 100:.1f} / "
-                           f"{p.loc[c, (TOP5, *k)] * 100:.1f}"
-                     for name, k in cols.items()}}
-                 for c in conditions]
+        def cell(c, k):
+            if pd.isna(p.loc[c, (TOP1, *k)]):
+                return ""
+            return (f"{p.loc[c, (TOP1, *k)] * 100:.1f} / "
+                    f"{p.loc[c, (TOP5, *k)] * 100:.1f} "
+                    f"(n={int(p.loc[c, (N, *k)])}, "
+                    f"{int(p.loc[c, (NCLS, *k)])} cls)")
+
+        rows = [{"Level": level_label, "Condition": c,
+                 **{name: cell(c, k) for name, k in cols.items()}}
+                for c in conditions]
         blocks.append(pd.DataFrame(rows))
     return pd.concat(blocks, ignore_index=True) if blocks else None
 
-def per_family(roots, outdir):
-    """Per-class recall from report_family.csv, runs side by side."""
-    frames = []
-    for res in find_results(roots, "report_family.csv"):
-        df = pd.read_csv(res.path, index_col=0)
-        df = df[~df.index.isin(["accuracy", "macro avg", "weighted avg"])]
-        frames.append(pd.DataFrame({
-            "family": df.index, "run": res.run, "split": res.split,
-            "eval_level": res.eval_level, "latents": res.latents,
-            "precision": df["precision"].values, "recall": df["recall"].values,
-            "f1": df["f1-score"].values,
-            "support": df["support"].astype(int).values}))
-    if not frames:
-        return None
-    fam = pd.concat(frames, ignore_index=True)
-    fam.to_csv(os.path.join(outdir, "per_family_long.csv"), index=False)
-    keys = ["split", "eval_level", "latents", "family"]
-    wide = fam.pivot_table(index=keys, columns="run", values="recall")
-    wide = fam.groupby(keys)["support"].max().rename("support").to_frame() \
-              .join(wide).reset_index()
-    runs = [c for c in wide.columns if c not in keys + ["support"]]
-    wide["spread"] = wide[runs].max(axis=1) - wide[runs].min(axis=1)
-    wide = wide.sort_values(
-        keys[:3] + ["support"], ascending=[True] * 3 + [False],
-        key=lambda c: c.map(SPLIT_ORDER) if c.name == "split" else c)
-    wide.to_csv(os.path.join(outdir, "per_family.csv"), index=False)
-    return wide
-
-def compare_runs(summary, metric="top1_accuracy_reachable"):
-    """Spread across runs within each comparable (split, eval, latents, level)."""
-    keys = ["split", "eval_level", "latents", "level"]
-    rows = []
-    for k, g in summary.groupby(keys, dropna=False):
-        if g["run"].nunique() < 2:
-            continue
-        row = dict(zip(keys, k))
-        row.update({r["run"]: r[metric] for _, r in g.iterrows()})
-        vals = g[metric].astype(float)
-        row["spread"] = vals.max() - vals.min()
-        p, n = vals.mean(), g["n_eligible"].astype(float).mean()
-        row["~1 SE"] = np.sqrt(p * (1 - p) / n) if n and np.isfinite(p) else np.nan
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-def build_supplement(roots, args, outdir, quiet=False):
+def build_supplement(roots, outdir, quiet=False):
     """Tables S4 and S5, from the predictions of one condition.
 
     Every split is included: the correlation between recall and specimen count
     is only interpretable read across train, val and test together.
     """
     per_class, corr = [], []
-    for res in find_results(roots, "predictions.csv", eval_level=args.supp_eval,
-                            latents=args.supp_latents):
+    for res in find_results(roots, "predictions.csv", eval_level=SUPP_EVAL,
+                            latents=SUPP_LATENTS):
         df = normalize_labels(pd.read_csv(res.path), quiet=quiet)
-        sup = class_support(df, args.supp_category)
+        sup = class_support(df, SUPP_CATEGORY)
         if sup is None or sup.empty:
             continue
         meta = {"run": res.run, "split": res.split}
         per_class.append(sup.assign(**meta))
         corr.extend(correlation_rows(sup, meta))
     if not per_class:
-        print(f"  no predictions.csv with eval_level={args.supp_eval} "
-              f"latents={args.supp_latents}; skipping S4 and S5", file=sys.stderr)
+        print(f"  no predictions.csv with eval_level={SUPP_EVAL} "
+              f"latents={SUPP_LATENTS}; skipping S4 and S5", file=sys.stderr)
     return write_supplement(per_class, corr, outdir, quiet)
 
-def write_tables(summary, args, outdir, verbose=True):
-    """The table set for one output directory."""
+def write_tables(summary, outdir, name, splits, verbose=True):
+    """Table 2 and S3."""
     os.makedirs(outdir, exist_ok=True)
     summary.to_csv(os.path.join(outdir, S3_NAME), index=False)
     written = [S3_NAME]
 
-    levels = {lv: TABLE_LEVELS.get(lv, lv.replace("_", " ").capitalize())
-              for lv in args.table_levels}
-    t2 = paper_table(summary, levels, latents=args.table_latents)
+    t2 = paper_table(summary, splits=splits)
     if t2 is not None:
-        t2.to_csv(os.path.join(outdir, T2_NAME), index=False)
-        written.append(T2_NAME)
+        t2.to_csv(os.path.join(outdir, name), index=False)
+        written.append(name)
         if verbose:
             print(f"\n{'=' * 96}\nTABLE 2 - top-1 / top-5 accuracy (%), "
                   f"reachable classes\n{'=' * 96}")
             print(t2.to_string(index=False))
-
-    if args.extras:
-        show = ["run", "split", "eval_level", "latents", "level", "n_eval",
-                "n_classes", "n_reachable_classes", "top1_accuracy",
-                "top1_accuracy_reachable", "macro_f1_reachable"]
-        md = summary[show].round(3)
-        with open(os.path.join(outdir, "taxonomy_summary.txt"), "w") as fh:
-            fh.write(md.to_string(index=False))
-        written.append("taxonomy_summary.txt")
-
-        cmp = compare_runs(summary)
-        if not cmp.empty:
-            cmp.to_csv(os.path.join(outdir, "run_comparison.csv"), index=False)
-            written.append("run_comparison.csv")
-            if verbose:
-                print(f"\n{'=' * 78}\nCROSS-RUN SPREAD\n{'=' * 78}")
-                print(cmp.round(4).to_string(index=False))
-                print("\nspread <= ~1 SE means the runs are indistinguishable "
-                      "on that row.")
-        if per_family(args.roots, outdir) is not None:
-            written += ["per_family.csv", "per_family_long.csv"]
     return written
 
 # --------------------------------------------------------------------------
@@ -270,50 +213,34 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--roots", nargs="+", required=True,
                     help="run directories, e.g. ../run_v72 ../run_v73h ../run_v73c")
-    ap.add_argument("--main-root", default=MAIN_ROOT,
-                    help=f"run Tables S4 and S5 report (default: {MAIN_ROOT})")
-    ap.add_argument("--outdir", default=None,
-                    help="one directory for the set (default: a copy under each "
-                         "<root>/classification/evaluation/paper)")
-    ap.add_argument("--levels", nargs="+", default=LEVELS,
-                    help=f"levels to summarise (default: {' '.join(LEVELS)})")
-    ap.add_argument("--table-levels", nargs="+", default=list(TABLE_LEVELS),
-                    help="levels to put in the paper table")
-    ap.add_argument("--table-latents", default=TABLE_LATENTS,
-                    help="latent source used in the paper table")
-    ap.add_argument("--supp-category", default=SUPP_CATEGORY,
-                    help="category Tables S4 and S5 report")
-    ap.add_argument("--supp-eval", default=SUPP_EVAL,
-                    help="masking level for Tables S4 and S5")
-    ap.add_argument("--supp-latents", default=SUPP_LATENTS,
-                    help="latent source for Tables S4 and S5")
+    ap.add_argument("--outdir", default=OUTDIR,
+                    help=f"where to write the tables (default: {OUTDIR}); S4 and "
+                         f"S5 go in a {MAIN_ROOT} subfolder")
+    ap.add_argument("--name", default=T2_NAME,
+                    help=f"paper table filename (default: {T2_NAME})")
+    ap.add_argument("--table-splits", nargs="+", default=list(TABLE_SPLITS),
+                    help=f"splits in the paper table (default: {' '.join(TABLE_SPLITS)})")
     ap.add_argument("--no-supplement", action="store_true",
                     help="skip Tables S4 and S5")
-    ap.add_argument("--extras", action="store_true",
-                    help="also write per-family recall, cross-run spread and a "
-                         "readable copy of the summary")
-    ap.add_argument("--quiet", action="store_true", help="write files without printing")
+    ap.add_argument("--quiet", action="store_true",
+                    help="write files without printing")
     args = ap.parse_args()
 
-    summary = build_summary(args.roots, args.levels, args.quiet)
+    summary = build_summary(args.roots, LEVELS, args.quiet)
+    written = write_tables(summary, args.outdir, args.name, args.table_splits,
+                           not args.quiet)
+    print(f"\nWrote {', '.join(written)} to {args.outdir}")
 
-    # S4 and S5 report one run; Table 2 and S3 cover every root
+    if args.no_supplement:
+        return
     main_root = next((r for r in args.roots
-                      if os.path.basename(r.rstrip("/")) == args.main_root), None)
-    if main_root is None and not args.no_supplement:
-        sys.exit(f"--main-root {args.main_root} not in --roots.")
-
-    # Table 2 and S3 describe every run given, so the same set goes into each
-    # run's paper directory rather than only the first one's
-    outdirs = ([args.outdir] if args.outdir else
-               [os.path.join(r, "classification", "evaluation", "paper")
-                for r in args.roots])
-
-    for i, outdir in enumerate(outdirs):
-        written = write_tables(summary, args, outdir, not args.quiet and i == 0)
-        if not args.no_supplement:
-            written += build_supplement([main_root], args, outdir, args.quiet)
-        print(f"\nWrote {', '.join(written)} to {outdir}")
+                      if os.path.basename(r.rstrip("/")) == MAIN_ROOT), None)
+    if main_root is None:
+        sys.exit(f"{MAIN_ROOT} not in --roots; needed for Tables S4 and S5.")
+    supp_dir = os.path.join(args.outdir, MAIN_ROOT)
+    os.makedirs(supp_dir, exist_ok=True)
+    supp = build_supplement([main_root], supp_dir, args.quiet)
+    print(f"Wrote {', '.join(supp)} to {supp_dir}")
 
 if __name__ == "__main__":
     main()
