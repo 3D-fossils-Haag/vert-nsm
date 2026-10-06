@@ -27,7 +27,7 @@ Main analysis (run per model: run_v72, run_v73h, run_v73c):
     python classification_eval.py --model_root run_v72 --ckpt 2500 --dataset_split test --eval_level specimen --encoded_latents
 
 Downsample experiment, common validation meshes from build_downsample_val_ds.py
-(run per model: run_10spec, run_30spec, run_50spec, run_70spec, run_v72):
+(run per model: run_10spec, run_30spec, run_50spec, run_70spec, run_v72)
 
     python classification_eval.py --model_root run_10spec --ckpt 3000 --dataset_split val --eval_level loo --encoded_latents --mesh_list common_eval_meshes.json --tag downsample_val_common
     python classification_eval.py --model_root run_10spec --ckpt 3000 --dataset_split val --eval_level specimen --encoded_latents --mesh_list common_eval_meshes.json --tag downsample_val_common
@@ -273,7 +273,7 @@ def main():
 
     eval_tag  = f'{args.eval_level}_{"base" if not args.encoded_latents else "latent_opt"}'
     split_dir = args.tag or args.dataset_split
-    suffix = f"{args.dataset_split}_{eval_tag}"
+    suffix = f"{split_dir}_{eval_tag}"
     out_dir   = os.path.join(run_dir, "classification/evaluation", split_dir, suffix)
 
     ds_split_keys = {"train": "list_mesh_paths", "val": "val_paths", "test": "test_paths"}
