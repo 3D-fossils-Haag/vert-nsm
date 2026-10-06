@@ -6,11 +6,18 @@ train/val/test, builds an SDF dataset, and trains a TriplanarDecoder with
 standard, contrastive, or hierarchy-aware DeepSDF loss.
 
 Usage:
-    python train_model.py --run_name my_experiment [--contrastive_loss | --hierarchy_loss]
-    python train_model.py --run_name n30 --splits paper/splits/downsample_30spec.json
+    python train_model.py --run_name my_experiment
+    python train_model.py --run_name my_experiment --contrastive_loss
+    python train_model.py --run_name my_experiment --hierarchy_loss
 
 Options:
     --run_name    Name of the output directory. Default: run_v1
+    --contrastive_loss   Train with contrastive DeepSDF loss. Needs
+                         contrastive_weight in config (0.01 recommended).
+    --hierarchy_loss     Train with hierarchy-aware DeepSDF loss. Needs
+                         hierarchy_weight in config (0.01 recommended); also
+                         accepts hierarchy_warmup and hierarchy_margins.
+                         Mutually exclusive with --contrastive_loss.
     --splits      JSON of precomputed splits (from paper/build_downsampled_datasets.py),
                   overriding the random 80/15/5 split.
 
