@@ -24,15 +24,24 @@ TRAIN_DIR = "run_v72" # TO DO: Choose training directory containing model ckpt a
 CKPT = '2500' # TO DO: Choose the ckpt value you want to analyze results for
 LC_PATH =  TRAIN_DIR + '/latent_codes' + '/' + CKPT + '.pth'
 MODEL_PATH = TRAIN_DIR +  '/model' + '/' + CKPT + '.pth'
-val_sum_fn = TRAIN_DIR + "/shape_completion/meshes/" + "partial_meshing_summary.json" # TO DO: Choose path to partial_meshing_summary.json from (generated using create_partial_meshes.py)
+
+# Downsample experiment: every model is scored on one common set of meshes,
+# using the partials generated once for run_v72
+downsample_experiment = False  # TO DO: Set to True if running for downsample experiment
+MESH_LIST = "common_eval_meshes.json" if downsample_experiment else None
+PARTIAL_DIR = "run_v72" if downsample_experiment else TRAIN_DIR
+tag = "_common" if downsample_experiment else ""
+
+# Build other paths
+val_sum_fn = PARTIAL_DIR + "/shape_completion/meshes/partial_meshing_summary.json"
 BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning/trial_scores.csv"  # TO DO: set to your CSV path
 LOAD_BEST_CFG_FROM_CSV = True
 split = "val"  # TO DO: Which dataset split to use - "train", "val", or "test"
 N_INF = "all"  # TO DO: Choose how many meshes to use for inference (or use "all" to run for all)
 fast_mode = True  # TO DO: Use fast mode to encode via PointNet or using 2-phase latent optimization (slow)
-if fast_mode == True:
-    encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt" # TO DO: Point to encoder ckpt
-    BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning_encoder/trial_scores.csv"  # TO DO: set to your CSV path
+if fast_mode:
+    encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt"  # TO DO: Point to encoder ckpt
+    BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning_encoder/trial_scores.csv"
     encoder_ckpt = os.path.abspath(encoder_path)
 
 # Load model config
@@ -88,21 +97,28 @@ for k, v in best_cfg.items():
 # Build validation ground truth dataset
 ds_split_keys = {"train": "list_mesh_paths", "val": "val_paths", "test": "test_paths"}
 split_key = ds_split_keys[split]
-mesh_names = {strip_partial_mesh_name(p) for p in config[split_key]}
-print(f"\n\nFound {len(config[split_key])} meshes in config['{split_key}'] (split='{split}')")
+if MESH_LIST:
+    mesh_paths = json.load(open(MESH_LIST))
+    print(f"\n\nUsing {len(mesh_paths)} meshes from {MESH_LIST}")
+else:
+    mesh_paths = config[split_key]
+    print(f"\n\nFound {len(mesh_paths)} meshes in config['{split_key}'] (split='{split}')")
+mesh_names = {strip_partial_mesh_name(p) for p in mesh_paths}
 
 # Load partial meshing summary
 with open(val_sum_fn, "r") as f:
     partial_mesh_summary = json.load(f)
 
 # Find corresponding partial meshes to use for shape completion against ground truth meshes
-pairs = build_partial_gt_mesh_pairs(partial_mesh_summary, mesh_names, split_key)
+pairs = build_partial_gt_mesh_pairs(partial_mesh_summary, mesh_names,
+                                    MESH_LIST or split_key)
+print("\n\n\nLENGTH PAIRS: ", len(pairs))
 
 # Build outfpath
 outfpath = TRAIN_DIR + '/shape_completion/evaluation/'
 os.makedirs(outfpath, exist_ok=True)
 mode_name = "encoder" if fast_mode else "2phase"
-summary_df_fpath = outfpath + f"{mode_name}_{split}_chamfer.csv"
+summary_df_fpath = outfpath + f"{mode_name}_{split}{tag}_chamfer.csv"
 write_header = not os.path.exists(summary_df_fpath)
 csv_file = open(summary_df_fpath, 'a', newline='')
 if write_header:

@@ -10,7 +10,6 @@ import sys
 import pyvista as pv
 import pymskt.mesh.meshes as meshes
 import vtk
-import re
 import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
 from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
@@ -25,12 +24,19 @@ TRAIN_DIR = "run_v72" # TO DO: Choose training directory containing model ckpt a
 CKPT = '2500' # TO DO: Choose the ckpt value you want to analyze results for
 LC_PATH =  TRAIN_DIR + '/latent_codes' + '/' + CKPT + '.pth'
 MODEL_PATH = TRAIN_DIR +  '/model' + '/' + CKPT + '.pth'
-val_sum_fn = TRAIN_DIR + "/shape_completion/meshes/" + "partial_meshing_summary.json" # TO DO: Choose path to partial_meshing_summary.json from (generated using create_partial_meshes.py)
+
+# Downsample experiment: every model is scored on one common set of meshes,
+# using the partials generated once for run_v72
+downsample_experiment = False  # TO DO: Set to True if running for downsample experiment
+PARTIAL_DIR = "run_v72" if downsample_experiment else TRAIN_DIR
+
+# Build remaining parameters
+val_sum_fn = PARTIAL_DIR + "/shape_completion/meshes/partial_meshing_summary.json"
 N_TRIALS = 15   # TO DO: Choose the number of trials for the grid search
 N_TRIAL_INF = 30   # TO DO: Choose the number of meshes to use for inference in each grid search trial
 N_FINAL_INF = 50   # TO DO: Choose how many meshes to use for final inference with best config reconstruction parameters from grid search
 split = "val"  # TO DO: Which dataset split to use - "train", "val", or "test"
-fast_mode = True  # TO DO: Use fast mode to encode via PointNet or using 2-phase latent optimization (slow)
+fast_mode = False  # TO DO: Use fast mode to encode via PointNet or using 2-phase latent optimization (slow)
 if fast_mode == True:
     OUTDIR = TRAIN_DIR + "/shape_completion/fine_tuning_encoder"
     encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt" # TO DO: Point to encoder ckpt
@@ -74,9 +80,14 @@ else:
                                         n_trials=N_TRIALS, valN=N_TRIAL_INF,
                                         log_path_csv=OUTDIR + "/trial_scores.csv")
 
+# Build inference subset
+n_final = min(N_FINAL_INF, len(pairs))
+if n_final < N_FINAL_INF:
+    print(f"\033[33mOnly {len(pairs)} pairs available; using all instead of {N_FINAL_INF}\033[0m")
+inf_subset = random.sample(pairs, n_final)
+
 # Loop through meshes using best parameters from grid search
 best_summary_log = []
-inf_subset = random.sample(pairs, N_FINAL_INF)
 for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):    
     try:
         print(f"\033[32m\n=== Processing {os.path.basename(pm_path)} ===\033[0m")
