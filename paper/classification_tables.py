@@ -62,7 +62,7 @@ METRICS = ["n_eval", "n_classes", "n_eligible", "n_reachable_classes",
            "top1_accuracy_reachable", "top5_accuracy_reachable",
            "macro_f1", "macro_f1_reachable", "weighted_f1"]
 
-LEVELS = ["family", "genus", "species", "region", "position_10", "position_20",
+LEVELS = ["broad_taxon", "family", "genus", "species", "region", "position_10", "position_20",
           "life_history"]
 
 # the paper table: which levels, and how they are titled in it
