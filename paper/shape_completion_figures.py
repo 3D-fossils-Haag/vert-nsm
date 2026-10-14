@@ -20,14 +20,15 @@ CONDITIONS = {
     "Contrastive":      "v73c_{split}_chamfer.csv"}
 
 ORDER  = list(CONDITIONS)
-SPLITS = {"train": "TRAIN", "val": "VALIDATION", "test": "TEST"}
+SPLITS = {"train": "TRAIN", "val": "VALIDATION", "test": "TEST"}   # panel C order
+BOX_SPLITS = ["train", "test", "val"]                               # panel A order
 COLORS = {"Base":           "#FF9500", "Encoder":        "#BF0603",
           "Encoder+refine": "#FF187C", "Hierarchy":      "#25998F",
            "Contrastive":    "#B056FF"}
 RUNTIME = {"Base": 198.45, "Encoder": 6.53, "Encoder+refine": 26.71,
            "Hierarchy": 133.30, "Contrastive": 167.07}
 TINTS   = {"train": 0.0, "test": 0.5, "val": 0.8}
-SCALE, FONTSIZE = 1e3, 12
+SCALE, FONTSIZE = 100, 15
 
 matplotlib.rcParams.update({"font.family": "sans-serif",
                             "font.sans-serif": ["Liberation Sans", "DejaVu Sans"],
@@ -70,15 +71,15 @@ def fig_boxplot(d, outdir, group_by="condition", style="violin", log=False,
                 ylim=None, pdf=False):
     """Boxplot / violin of chamfer distributions, grouped by condition or split."""
     conds  = [c for c in ORDER  if c in set(d.condition)]
-    splits = [s for s in SPLITS if s in set(d.split)]
+    splits = [s for s in BOX_SPLITS if s in set(d.split)]
     if group_by == "split":
         groups, labels, inner = splits, [SPLITS[s] for s in splits], conds
         pair = lambda g, i: (i, g)
     else:
-        groups, labels, inner = conds, [c.upper() for c in conds], splits
+        groups, labels, inner = conds, [c.upper().replace("+", "\n+") for c in conds], splits
         pair = lambda g, i: (g, i)
 
-    step = len(inner) + 1.0
+    step = len(inner) + 1.5
     fig, ax = plt.subplots(figsize=(9.0, 4.5))
     for gi, g in enumerate(groups):
         for ii, i in enumerate(inner):
@@ -86,26 +87,26 @@ def fig_boxplot(d, outdir, group_by="condition", style="violin", log=False,
             v = d[(d.condition == cond) & (d.split == split)].chamfer.to_numpy() * SCALE
             if not len(v): continue
             pos, col = gi * step + ii, tinted(cond, split)
-            ax.scatter(np.random.default_rng(0).normal(pos, 0.055, len(v)), v,
-                       s=2.8, color=col, alpha=0.6, zorder=0, linewidths=0, rasterized=True)
+            ax.scatter(np.random.default_rng(0).normal(pos, 0.01, len(v)), v,
+                       s=20, color=col, alpha=0.2, zorder=0, linewidths=0, rasterized=True)
             if style == "violin":
                 parts = ax.violinplot([v], positions=[pos], widths=0.9,
                                       showextrema=False, showmedians=True)
                 parts["bodies"][0].set(facecolor=col, alpha=0.5, linewidth=0)
-                parts["cmedians"].set(color="black", linewidth=1.0)
+                parts["cmedians"].set(color="black", linewidth=2.5)
             else:
                 bp = ax.boxplot([v], positions=[pos], widths=0.9, whis=(5, 95),
                                 patch_artist=True, showfliers=False,
-                                medianprops=dict(color="black", lw=1.0),
+                                medianprops=dict(color="black", lw=2.5),
                                 whiskerprops=dict(color=col), capprops=dict(color=col))
                 bp["boxes"][0].set(facecolor=col, alpha=0.5, linewidth=0)
-            ax.scatter([pos], [v.mean()], marker="D", s=14, color="white",
-                       edgecolor="black", linewidths=0.6, zorder=5)
+            ax.scatter([pos], [v.mean()], marker="D", s=50, color="white",
+                       edgecolor="black", linewidths=1.2, zorder=5)
 
     ax.set_xticks([gi * step + (len(inner) - 1) / 2 for gi in range(len(groups))])
     ax.set_xticklabels(labels)
     ax.set_xlim(-1, (len(groups) - 1) * step + len(inner))
-    ax.set_ylabel("CHAMFER DISTANCE ($\\times10^{-3}$)")
+    ax.set_ylabel("CHAMFER DISTANCE (%)")
     ax.grid(axis="y", alpha=0.25, lw=0.5); ax.set_axisbelow(True)
     if log: ax.set_yscale("log")
     if ylim: ax.set_ylim(*ylim)
@@ -114,12 +115,14 @@ def fig_boxplot(d, outdir, group_by="condition", style="violin", log=False,
     ax.add_artist(ax.legend(
         handles=[P(facecolor=tinted("#555555", s),
                    label=f"{SPLITS[s]}\n(N={d[d.split==s].mesh.nunique():,})") for s in splits],
-        fontsize=FONTSIZE-1, ncol=len(splits), frameon=False, loc="upper center"))
+        fontsize=FONTSIZE-1, ncol=len(splits), frameon=False, loc="upper center", bbox_to_anchor=(0.45, 1.0),
+        handlelength=1.5, columnspacing=1.0, handletextpad=0.5))
     ax.add_artist(ax.legend(
         handles=[L([], [], marker="D", linestyle="none", markerfacecolor="white",
-                   markeredgecolor="black", markeredgewidth=0.6, markersize=5, label="MEAN"),
-                 L([], [], color="black", lw=1.0, label="MEDIAN")],
-        fontsize=FONTSIZE-1, frameon=False, loc="upper right"))
+                   markeredgecolor="black", markeredgewidth=1.2, markersize=8, label="MEAN"),
+                 L([], [], color="black", lw=2.5, label="MEDIAN")],
+        fontsize=FONTSIZE-1, frameon=False, loc="upper right",
+        handlelength=1.5, handletextpad=0.5))
 
     fig.tight_layout()
     save(fig, outdir, "fig_chamfer_boxplot", pdf)
@@ -129,18 +132,18 @@ def fig_gap(d, outdir, pdf=False):
     OFFSETS = {"Base": -12, "Encoder": 0, "Encoder+refine": 0,
                "Hierarchy": 0, "Contrastive": 12}
     xs = list(range(len(SPLITS)))
-    fig, ax = plt.subplots(figsize=(4.5, 4.5))
+    fig, ax = plt.subplots(figsize=(5.4, 4.5))
     for cond in ORDER:
         y = [d[(d.condition == cond) & (d.split == s)]["chamfer"].median() * SCALE
              for s in SPLITS]
         if any(np.isnan(v) for v in y): continue
-        ax.plot(xs, y, "-o", color=COLORS[cond], lw=2.2, ms=8)
-        ax.annotate(cond.upper(), (xs[-1], y[-1]),
+        ax.plot(xs, y, "-o", color=COLORS[cond], lw=2.8, ms=9)
+        ax.annotate(cond.upper().replace("+", "\n+"), (xs[-1], y[-1]),
                     xytext=(8, OFFSETS.get(cond, 0)), textcoords="offset points",
                     fontsize=FONTSIZE-3, color=COLORS[cond], va="center", fontweight="bold")
     ax.set_xticks(xs); ax.set_xticklabels(list(SPLITS.values()))
-    ax.set_xlim(-0.25, len(SPLITS) + 0.3)
-    ax.set_ylabel("MEDIAN CHAMFER ($\\times10^{-3}$)")
+    ax.set_xlim(-0.25, len(SPLITS) + 0.03)
+    ax.set_ylabel("MEDIAN CHAMFER (%)")
     ax.grid(axis="y", alpha=0.25, lw=0.5); ax.set_axisbelow(True)
     fig.tight_layout()
     save(fig, outdir, "fig_generalization_gap", pdf)
@@ -155,14 +158,14 @@ def fig_tradeoff(d, outdir, pdf=False):
     for cond in ORDER:
         v = d[(d.condition == cond) & (d.split == "test")]["chamfer"]
         if not len(v) or cond not in RUNTIME: continue
-        ax.scatter(RUNTIME[cond], v.median() * SCALE, s=160, color=COLORS[cond],
-                   edgecolor="black", linewidths=0.8, zorder=3)
+        ax.scatter(RUNTIME[cond], v.median() * SCALE, s=220, color=COLORS[cond],
+                   edgecolor="black", linewidths=1.0, zorder=3)
         ax.annotate(cond.upper(), (RUNTIME[cond], v.median() * SCALE),
                     xytext=(0, OFFSETS_Y.get(cond, 0)), textcoords="offset points",
                     ha="center", fontsize=FONTSIZE-4, color=COLORS[cond],
                     fontweight="bold", va=OFFSET_VA.get(cond, "center"))
     ax.set_xlabel("INFERENCE TIME PER MESH (s)")
-    ax.set_ylabel("MEDIAN CHAMFER ($\\times10^{-3}$)")
+    ax.set_ylabel("MEDIAN CHAMFER (%)")
     ax.set_xlim(-12, 225)
     ax.grid(alpha=0.25, lw=0.5); ax.set_axisbelow(True)
     fig.tight_layout()
