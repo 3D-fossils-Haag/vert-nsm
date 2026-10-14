@@ -84,6 +84,21 @@ def compute_norm_pos(seq_num, total_vert):
     except (ValueError, TypeError):
         return np.nan
 
+def chance_topk(y_q, y_g, q_hide, g_hide, k=1, eligible=None):
+    """Expected top-k accuracy if the k neighbours were random allowed gallery items."""
+    y_q = np.asarray(y_q, dtype=object); y_g = np.asarray(y_g, dtype=object)
+    q_h = np.asarray(q_hide, dtype=object); g_h = np.asarray(g_hide, dtype=object)
+    valid_g = pd.notna(y_g)
+    p = np.full(len(y_q), np.nan)
+    for i in range(len(y_q)):
+        if pd.isna(y_q[i]):
+            continue
+        allowed = valid_g if pd.isna(q_h[i]) else valid_g & (g_h != q_h[i])
+        if allowed.any():
+            p[i] = 1 - (1 - (y_g[allowed] == y_q[i]).mean()) ** k
+    keep = ~np.isnan(p) if eligible is None else ~np.isnan(p) & eligible
+    return float(p[keep].mean()) if keep.any() else float("nan")
+
 def load_species_meta(path):
     df = pd.read_csv(path)
     meta = {}
@@ -262,6 +277,7 @@ def apply_exclusions(labels):
     for cat in ["family", "genus", "species", "broad_taxon"]:
         labels.loc[is_dibamus | is_rhyncho | is_snake, cat] = None
     labels.loc[is_amph, "region"] = None
+    labels.loc[is_snake, "life_history"] = None
     return labels
 
 def main():
@@ -336,13 +352,18 @@ def main():
 
     print(f"\nQuery: {args.dataset_split} ({len(query_files)}) | Gallery: train ({len(gallery_files)})")
     print(f"eval_level: {args.eval_level}")
-    print(f"{'category':<14}{'n':>6}{'cls':>5}{'top1':>8}{'top5':>8}{'reachF1':>9}{'reach_top1':>11}{'reach_cls':>10}")
-    print("-" * 71)
+    print(f"{'category':<14}{'n':>6}{'cls':>5}{'top1':>8}{'ch1':>7}{'top5':>8}{'ch5':>7}"
+          f"{'reachF1':>9}{'reach_top1':>11}{'reach_cls':>10}")
+    print("-" * 85)
 
     for cat, corder in cats.items():
         eligible = get_eligibility(labels_q[cat], labels_g[cat], q_hide, g_hide)
         summ, report, yt, yp, y5, full1, full5 = evaluate_category(labels_q[cat], labels_g[cat], order, eligible=eligible)
         summ["category"] = cat
+        for k, t in [(1, "top1"), (5, "top5")]:
+            summ[f"chance_{t}"] = chance_topk(labels_q[cat], labels_g[cat], q_hide, g_hide, k)
+            summ[f"chance_{t}_reachable"] = chance_topk(labels_q[cat], labels_g[cat],
+                                                        q_hide, g_hide, k, eligible=eligible)
         summary_rows.append(summ)
         all_json["categories"][cat] = {"summary": summ, "per_class": report}
         preds[f"{cat}_true"] = labels_q[cat]
@@ -351,12 +372,13 @@ def main():
         pd.DataFrame(report).transpose().to_csv(os.path.join(out_dir, f"report_{cat}.csv"))
         if summ["n_classes"] <= CM_MAX_CLASSES:
             plot_confusion(yt, yp, f"{cat} top1 ({args.eval_level}, "
-                        f"top1={summ['top1_accuracy']:.2f}, top5={summ['top5_accuracy']:.2f})",
-                        os.path.join(out_dir, f"confusion_{cat}.png"), class_order=corder)
+                           f"top1={summ['top1_accuracy']:.2f}, top5={summ['top5_accuracy']:.2f})",
+                           os.path.join(out_dir, f"confusion_{cat}.png"), class_order=corder)
             plot_confusion(yt, y5, f"{cat} top5 ({args.eval_level})",
-                        os.path.join(out_dir, f"confusion_{cat}_top5.png"), class_order=corder)
+                           os.path.join(out_dir, f"confusion_{cat}_top5.png"), class_order=corder)
         print(f"{cat:<14}{summ['n_eval']:>6}{summ['n_classes']:>5}"
-              f"{summ['top1_accuracy']:>8.3f}{summ['top5_accuracy']:>8.3f}"
+              f"{summ['top1_accuracy']:>8.3f}{summ['chance_top1']:>7.3f}"
+              f"{summ['top5_accuracy']:>8.3f}{summ['chance_top5']:>7.3f}"
               f"{summ['macro_f1_reachable']:>9.3f}{summ['top1_accuracy_reachable']:>11.3f}"
               f"{summ['n_reachable_classes']:>10}")
 
