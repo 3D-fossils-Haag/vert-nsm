@@ -28,9 +28,9 @@ rebuilt here; this is the strongest top-5 view the file supports.
 
 Usage
 -----
-    python classif_figures.py --roots ../run_v72  --outdir classification/evaluation/paper                # the published set
-    python classif_figures.py --roots ../run_v72 --split test --mode top1
-    python classif_figures.py --roots ../run_v72 ../run_v73h --extras  # everything
+python classification_figures.py --roots ../run_v72  --outdir classification/evaluation/paper                # the published set
+python classification_figures.py --roots ../run_v72 --split test --mode top1
+python classification_figures.py --roots ../run_v72 ../run_v73h --extras  # everything
 """
 
 import argparse
@@ -77,6 +77,8 @@ FIG_EVAL = "specimen"
 FIG_LATENTS = "latent_opt"
 FIG_MODE = "top5"
 
+LABEL_RENAME = {"burrowing": "fossorial"}
+
 # Define functions
 def class_order_for(cat, values):
     """Anatomical order for region, numeric for position bins, else alphabetical."""
@@ -100,9 +102,12 @@ def build_rows(df, cat, mode):
     sub = df[df[tcol].notna() & df[pcol].notna()]
     if sub.empty:
         return None, None
-
-    yt = sub[tcol].astype(str).to_numpy(dtype=object)
-    yp = sub[pcol].astype(str).to_numpy(dtype=object)
+    rn = lambda v: LABEL_RENAME.get(str(v).lower(), v)
+    yt = np.array([rn(v) for v in sub[tcol].astype(str)], dtype=object)
+    yp = np.array([rn(v) for v in sub[pcol].astype(str)], dtype=object)
+    keep = ~pd.Series(yt).str.lower().eq("snake").to_numpy()
+    yt, yp = yt[keep], yp[keep]
+    sub = sub[keep]
     if mode == "top1":
         return yt, [[p] for p in yp]
     if hcol not in sub.columns:
@@ -146,7 +151,7 @@ def plot_confusion(y_true, rows, out_png, class_order=None, title="",
         for i in range(len(classes)):
             for j in range(len(classes)):
                 if cm[i, j] > 0:
-                    ax.text(j, i, f"{cm[i, j]:.2f}" if normalize else int(cm[i, j]),
+                    ax.text(j, i, f"{cm[i, j] * 100:.0f}" if normalize else int(cm[i, j]),
                             ha="center", va="center", fontsize=fs * CM_CELL_REL,
                             color="white" if cm[i, j] < 0.6 else "black")
     fig.tight_layout(rect=[0, 0.02, 1, 1])
@@ -156,8 +161,8 @@ def plot_confusion(y_true, rows, out_png, class_order=None, title="",
     plt.close(fig)
     return len(classes)
 
-def save_colorbar(out_png, label="Row-normalised fraction", vmax=1.0,
-                  fontsize=9, also_pdf=False):
+def save_colorbar(out_png, label="% TRUE CLASS", vmax=100,
+                  fontsize=14, also_pdf=False):
     """Standalone colorbar, tick numbers rotated 90 degrees."""
     fig, ax = plt.subplots(figsize=(0.2, 4.0))
     sm = matplotlib.cm.ScalarMappable(

@@ -60,6 +60,8 @@ OUTDIR = "../classification_tables"
 METRICS = ["n_eval", "n_classes", "n_eligible", "n_reachable_classes",
            "top1_accuracy", "top5_accuracy",
            "top1_accuracy_reachable", "top5_accuracy_reachable",
+           "chance_top1", "chance_top5",
+           "chance_top1_reachable", "chance_top5_reachable",
            "macro_f1", "macro_f1_reachable", "weighted_f1"]
 
 LEVELS = ["broad_taxon", "family", "genus", "species", "region", "position_10", "position_20",
@@ -147,26 +149,38 @@ def paper_table(summary, levels=TABLE_LEVELS, latents=TABLE_LATENTS,
             continue
         sub = sub.assign(Condition=sub["run"].map(lambda r: RUN_LABELS.get(r, r)))
         TOP1, TOP5 = "top1_accuracy_reachable", "top5_accuracy_reachable"
+        CH1, CH5 = "chance_top1_reachable", "chance_top5_reachable"
         N, NCLS = "n_eligible", "n_reachable_classes"
+        vals = [v for v in (TOP1, TOP5, CH1, CH5, N, NCLS) if v in sub.columns]
         p = sub.pivot_table(index="Condition", columns=["split", "eval_level"],
-                            values=[TOP1, TOP5, N, NCLS])
+                            values=vals)
         cols = {f"{s.capitalize()} {EVAL_LABELS.get(e, e)}": (s, e)
                 for s in splits for e in evals if (TOP1, s, e) in p.columns}
 
         known = [c for c in RUN_LABELS.values() if c in p.index]
         conditions = known + [c for c in p.index if c not in known]
 
-        def cell(c, k):
-            if pd.isna(p.loc[c, (TOP1, *k)]):
-                return ""
-            return (f"{p.loc[c, (TOP1, *k)] * 100:.1f} / "
-                    f"{p.loc[c, (TOP5, *k)] * 100:.1f} "
-                    f"(n={int(p.loc[c, (N, *k)])}, "
-                    f"{int(p.loc[c, (NCLS, *k)])} cls)")
+        def get(c, m, k):
+            return p.loc[c, (m, *k)] if (m, *k) in p.columns else np.nan
 
-        rows = [{"Level": level_label, "Condition": c,
-                 **{name: cell(c, k) for name, k in cols.items()}}
-                for c in conditions]
+        def cell(c, k):
+            if pd.isna(get(c, TOP1, k)):
+                return ""
+            return f"{get(c, TOP1, k) * 100:.1f} / {get(c, TOP5, k) * 100:.1f}"
+
+        def shared(k, fmt):
+            c = next((c for c in conditions if pd.notna(get(c, CH1, k))), None)
+            return "" if c is None else fmt(*(get(c, m, k) for m in (CH1, CH5, N, NCLS)))
+
+        n_fmt = lambda c1, c5, n, ncls: f"{int(n)} ({int(ncls)})"
+        ch_fmt = lambda c1, c5, n, ncls: f"{c1 * 100:.1f} / {c5 * 100:.1f}"
+
+        rows = [{"Level": level_label, "Condition": lab,
+                 **{name: shared(k, f) for name, k in cols.items()}}
+                for lab, f in [("n (classes)", n_fmt), ("Chance", ch_fmt)]]
+        rows += [{"Level": level_label, "Condition": c,
+                  **{name: cell(c, k) for name, k in cols.items()}}
+                 for c in conditions]
         blocks.append(pd.DataFrame(rows))
     return pd.concat(blocks, ignore_index=True) if blocks else None
 
