@@ -29,7 +29,7 @@ bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
 | `morphol_disparity_lms_latents.ipynb` | Figures 10 and S2 ; Tables S6-S7 |
 | `latent_interp_figs.ipynb` | Figures 11 and S3 |
 | `downsample_figure.ipynb` | Figure S1 |
-| `build_downsampled_datasets.py` | Tables S9-S10 |
+| `build_downsample_val_ds.py` | Tables S9-S10 |
 | `run_v72_split_downsample_exp.sh` | File S3 |
 | `../lizard_species_list.csv` | Table S1 |
 
@@ -317,6 +317,25 @@ Generates the triplanar, CNN, MLP, and loss icons used to assemble the network a
 
 ---
 
+### `run_v72_split_downsample_exp.sh`
+
+**Produces:** File S3
+
+Writes the full-size (95-specimen) split as a JSON file in the same format as the downsampled splits, so that the complete model and the reduced-sampling models are trained and evaluated through an identical code path. Reads the split already resolved in the `run_v72` config and recovers the specimen behind each mesh by matching normalized basenames against the specimen column of the species list.
+
+**Inputs**
+
+- `../run_v72/model_params_config.json` (`list_mesh_paths`, `val_paths`, `test_paths`)
+- `../lizard_species_list.csv`
+
+**Output:** `splits/downsample_95spec.json` — train, validation, and test mesh paths plus the contributing specimen list; specimen and mesh counts are printed on completion.
+
+**Run**
+
+    bash run_v72_split_downsample_exp.sh
+
+---
+
 ### `build_downsampled_datasets.py`
 
 **Produces:** Tables S9-S10
@@ -332,6 +351,48 @@ Builds taxon-stratified downsampled datasets (10/30/50/70 specimens) for the sam
 - `splits/downsample_70spec.json`
 - 
 Pass a split file to training with `python train_model.py --splits splits/downsample_10spec.json`.
+
+---
+
+### `build_downsample_val_ds.py`
+
+**Produces:** Tables S9-S10
+
+Assembles the common evaluation set for the sampling-effort experiment. Each downsampled run has its own split, so comparing them fairly requires scoring every model on the same meshes, none of which any model has seen. Takes every mesh across all runs and keeps those absent from all of their training sets, keyed by basename because runs refer to the same mesh by different absolute paths.
+
+**Input**
+Resolved configurations for every run passed to `--roots` (run_10spec, run_30spec, run_50spec, run_70spec, run_v72):
+
+- `<run>/model_params_config.json`
+
+**Output:** `../common_eval_meshes.json` — mesh paths held out by every run, written beside the runs so that `shape_completion_eval.py`, `encode_latents_for_eval.py`, and `classification_eval.py` resolve it from `NSM/nsm`. A per-run summary of training and held-out counts and the specimen composition of the query set are printed on completion.
+
+**Run**
+
+    python build_downsample_val_ds.py --roots ../run_10spec ../run_30spec ../run_50spec ../run_70spec ../run_v72
+
+---
+
+### `downsample_figure.ipynb`
+
+**Produces:** Figure S1
+
+Plots shape-completion error and classification accuracy against training-set size for the five sampling-effort models (10, 30, 50, 70, and 95 specimens). Every model is scored on the shared held-out meshes from `build_downsample_val_ds.py`, so the curves differ only in how many specimens each model was trained on. Chamfer distances are summarized as median and IQR because the distributions are right-skewed, and each run is compared with the full training set, and with the next step in the series, using paired Wilcoxon signed-rank tests with Holm correction applied within each family of tests. Only reachable classification metrics are plotted, since under specimen masking a class with a single specimen has no same-label gallery entry remaining.
+
+**Inputs**
+
+- `<run>/shape_completion/evaluation/2phase_val_common_chamfer.csv` for each run in `RUNS`, produced by `shape_completion_eval.py` with `downsample_experiment = True`
+- `../downsample_tables/Table_S3_classification_stats.csv`, produced by `classification_tables.py` on the common validation meshes:
+
+      python classification_tables.py --roots ../run_10spec ../run_30spec ../run_50spec ../run_70spec ../run_v72 \
+          --table-splits downsample_val_common --no-supplement \
+          --name Table_downsample_classif.csv --outdir ../downsample_tables
+
+**Outputs** (written to `OUTDIR`, by default `../downsample_tables/`)
+
+- `Fig_downsample_levels.png` — Chamfer distance and top-1/top-5 LOO and LOSO accuracy against training-set size
+- `Data_S_shape_completion_chamfer_raw.csv` — per-mesh Chamfer distances for every run
+- `downsample_stats.txt` — Chamfer descriptives, paired Wilcoxon results, and the reachable-accuracy table
 
 ---
 
