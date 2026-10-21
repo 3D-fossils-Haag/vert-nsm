@@ -15,8 +15,8 @@ bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
 **Manuscript figures and tables**
 | File | Manuscript output |
 | --- | --- |
-| `shape_completion_table.py` | Table 1 |
-| `classification_tables.py` | Table 2; Tables S3–S5 |
+| `shape_completion_table.py` | Table 1 ; Table S9|
+| `classification_tables.py` | Table 2; Tables S3–S4 ; Table S10|
 | `life_hist_grid_fig.ipynb` | Figure 1 |
 | `network_architecture_icons.ipynb` | Figure 2 schematic elements |
 | `conf_matr_schaema.ipynb` | Figure 3 schematic element |
@@ -25,10 +25,13 @@ bottom after editing the configuration cell at the top (paths, `TRAIN_DIR`,
 | `classification_figures.py` | Figure 5 |
 | `PCA_tSNE_UMAP_paper_figs.ipynb` | Figure 6 |
 | `LDA_paper_fig.ipynb` | Figure 7 ; Table S8 |
-| `GMM_spearman_mesh_grid.ipynb` | Figures 8 and 9 |
-| `morphol_disparity_lms_latents.ipynb` | Figures 10 and S1 ; Tables S6-S7|
-| `latent_interp_figs.ipynb` | Figures 11 and S2 |
+| `GMM_spearman_mesh_grid.ipynb` | Figures 8 and 9 ; Table S5 |
+| `morphol_disparity_lms_latents.ipynb` | Figures 10 and S2 ; Tables S6-S7 |
+| `latent_interp_figs.ipynb` | Figures 11 and S3 |
+| `downsample_figure.ipynb` | Figure S1 |
 | `build_downsampled_datasets.py` | Tables S9-S10 |
+| `run_v72_split_downsample_exp.sh` | File S3 |
+| `../lizard_species_list.csv` | Table S1 |
 
 **Interactive 3D renderings, plots, and videos** on the [vert-nsm-figs GitHub Pages site](https://3d-fossils-haag.github.io/vert-nsm-figs/)
 
