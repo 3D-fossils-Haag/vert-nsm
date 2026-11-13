@@ -13,8 +13,9 @@ import pymskt.mesh.meshes as meshes
 import vtk
 import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
-from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial, undo_pose, optimize_latent_pose, POSE_STANDARD, POSE_LOW_COMPLETE, snap_to_partial
-from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, grid_search, grid_search_pointnet, region_errors, undo_pose_error
+from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
+from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, grid_search, grid_search_pointnet, region_errors
+from NSM.alignment import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, POSE_LOW_COMPLETE, snap_to_partial
 # Monkey Patch into pymskt.mesh.meshes.Mesh
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
 meshes.Mesh.point_coords = property(fixed_point_coords)
@@ -111,10 +112,10 @@ if fossils:
                    if os.path.basename(p).split("_fossil")[0] in gt_paths)
     print(f"{len(pairs)} fossil/intact pairs in '{split}'")
 
-    #ONLY = "agamidae_agama_atra_uf180711_07-t2"   # KW TO DO: quick patch, None = all fossils
-    #if ONLY:
-        #pairs = [pr for pr in pairs if os.path.basename(pr[0]).startswith(ONLY + "_fossil")]
-        #print(f"Filtered to {len(pairs)} pair(s) matching {ONLY}")
+    ONLY = "agamidae_agama_atra_uf180711_07-t2"   # KW TO DO: quick patch, None = all fossils
+    if ONLY:
+        pairs = [pr for pr in pairs if os.path.basename(pr[0]).startswith(ONLY + "_fossil")]
+        print(f"Filtered to {len(pairs)} pair(s) matching {ONLY}")
 
 else:
     with open(val_sum_fn, "r") as f:

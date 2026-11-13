@@ -555,26 +555,6 @@ def plotly_color(c):
         r, g, b = [int(255 * v) for v in c[:3]]
         return f'rgb({r},{g},{b})'
     return c
-
-# Load landmarks file (.mrk.json)
-def load_mrk_json(path):
-    with open(path, "r") as f:
-        data = json.load(f)
-    markups = data.get("markups", [])
-    if not markups:
-        raise ValueError(f"No 'markups' found in {path}")
-    control_points = markups[0].get("controlPoints", [])
-    points = []
-    labels = []
-    for cp in control_points:
-        pos = cp.get("position")
-        if pos is None:
-            continue
-        points.append(pos)
-        labels.append(cp.get("label"))
-    points = np.asarray(points, dtype=np.float32)
-    return points, labels
- 
  
 def bg_colors(n_pcs, base_col, max_tint_col):
     """One background colour per PC row, base → max tint."""

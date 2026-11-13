@@ -10,6 +10,7 @@ import time
 import pyvista as pv
 from NSM.optimization import normalize_mesh, get_norm_params, get_top_k_pcs, build_sdf_dataset, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, optimize_latent_partial, snap_to_partial
 from NSM.helper_funcs import convert_ply_to_vtk
+from NSM.alignment import undo_pose_error
 import glob
 import sys
 from collections import namedtuple
@@ -530,23 +531,3 @@ def write_supplement(per_class, corr, outdir, quiet=False):
             print(keep.to_string(index=False) if not keep.empty else
                   f"no condition had >= {MIN_CLASSES_FOR_RHO} classes")
     return written
-
-def undo_pose_error(compl, fossil_path, ref_path):
-    """Move a completion from the aligned fossil's frame into the ground truth frame, using the exact similarity
-    between the aligned fossil and its unperturbed copy (same vertex order). This removes the alignment error, so
-    Chamfer/L1 measure shape error only. Returns compl unchanged if the meshes don't correspond."""
-    if not ref_path or not os.path.exists(ref_path):
-        return compl
-    X = np.asarray(pv.read(fossil_path).points, float)
-    Y = np.asarray(pv.read(ref_path).points, float)
-    if len(X) != len(Y):
-        return compl
-    mx, my = X.mean(0), Y.mean(0)
-    U, S, Vt = np.linalg.svd((X - mx).T @ (Y - my))
-    D = np.eye(3)
-    D[2, 2] = np.sign(np.linalg.det(U @ Vt))
-    R = U @ D @ Vt
-    s = (S * np.diag(D)).sum() / ((X - mx) ** 2).sum()
-    out = compl.copy()
-    out.points = s * (np.asarray(compl.points, float) - mx) @ R + my
-    return out
