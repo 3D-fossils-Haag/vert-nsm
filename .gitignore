@@ -1,19 +1,27 @@
-alignedLMs/  
-exclu/
-vertebrae_meshes/*.vtk
-/vertebrae_meshes*
-/build*
+# meshes / landmarks / models
+*.vtk
+*.ply
+*.stl
+*.obj
+*.npz
+*.npy
+*.pt
+*.pth
+*.ckpt
+*.mrk.json
+# outputs / data dirs
+*.csv
+*.zip
+*.png
+*.tar.gz
+run_v*/
+fossilized*/
+perturbed*/
+vertebrae_meshes/
+atlas_db/
+# python junk
 __pycache__/
-*/__pycache__/
-/original_data_unaligned_unscaled/
 *.pyc
-run_v56/
-run_v57/
-hierarchy_v1/
-literature/
-.DS_Store
-reports/
-/hierarchy/grid_search_results/
-# Encoder: regenerable data/logs/eval artifacts + model binaries (shipped separately)
-encoder/data/
-encoder/checkpoints/
+.ipynb_checkpoints/
+nsm.egg-info/
+*.parquet
