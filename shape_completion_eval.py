@@ -2,6 +2,7 @@
 # Use partial vertebrae dataset made with create_partial_meshes.py for validation against ground truth meshes
 
 import os
+import glob
 import torch
 import numpy as np
 import pandas as pd
@@ -13,7 +14,8 @@ import vtk
 import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
 from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
-from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv
+from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, region_errors
+from NSM.alignment import undo_pose_error
 # Monkey Patch into pymskt.mesh.meshes.Mesh
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
 meshes.Mesh.point_coords = property(fixed_point_coords)
@@ -36,13 +38,20 @@ tag = "_common" if downsample_experiment else ""
 val_sum_fn = PARTIAL_DIR + "/shape_completion/meshes/partial_meshing_summary.json"
 BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning/trial_scores.csv"  # TO DO: set to your CSV path
 LOAD_BEST_CFG_FROM_CSV = True
-split = "val"  # TO DO: Which dataset split to use - "train", "val", or "test"
+split = "test"  # TO DO: Which dataset split to use - "train", "val", or "test"
 N_INF = "all"  # TO DO: Choose how many meshes to use for inference (or use "all" to run for all)
 fast_mode = True  # TO DO: Use fast mode to encode via PointNet or using 2-phase latent optimization (slow)
+FOSSIL_DIR = "perturbed/aligned_mw_surf_per_foss_cover/models"   # TO DO: None = modern partials (original behaviour)
+LABEL_DIR = "fossilized"   # TO DO: unperturbed raw fossils (carry 'broken' labels; reference for removing alignment error)
+GRID_RUN = "fine_tuning_encoder_perturbed_aligned_mw_surf_per_foss_cover_models_pose/train"   # TO DO: grid search run to take best_cfg from
+BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/" + (GRID_RUN if FOSSIL_DIR else "fine_tuning") + "/trial_scores.csv"
 if fast_mode:
     encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt"  # TO DO: Point to encoder ckpt
-    BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning_encoder/trial_scores.csv"
+    if not FOSSIL_DIR:
+        BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning_encoder/trial_scores.csv"
     encoder_ckpt = os.path.abspath(encoder_path)
+if FOSSIL_DIR:
+    tag = "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
 
 # Load model config
 config = load_config(config_path=TRAIN_DIR + '/model_params_config.json')
@@ -106,23 +115,29 @@ else:
 mesh_names = {strip_partial_mesh_name(p) for p in mesh_paths}
 
 # Load partial meshing summary
-with open(val_sum_fn, "r") as f:
-    partial_mesh_summary = json.load(f)
-
 # Find corresponding partial meshes to use for shape completion against ground truth meshes
-pairs = build_partial_gt_mesh_pairs(partial_mesh_summary, mesh_names,
-                                    MESH_LIST or split_key)
-print("\n\n\nLENGTH PAIRS: ", len(pairs))
+if FOSSIL_DIR:
+    # Pair "<name>_fossil*.vtk" with the intact "<name>" mesh in this split
+    gt_paths = {os.path.splitext(os.path.basename(p))[0]: p.replace("/home/k.wolcott/", "/home/kaubricot/Downloads/")
+                for p in mesh_paths}
+    pairs = sorted((p, gt_paths[os.path.basename(p).split("_fossil")[0]])
+                   for p in glob.glob(os.path.join(FOSSIL_DIR, "*.vtk"))
+                   if os.path.basename(p).split("_fossil")[0] in gt_paths)
+else:
+    with open(val_sum_fn, "r") as f:
+        partial_mesh_summary = json.load(f)
+    pairs = build_partial_gt_mesh_pairs(partial_mesh_summary, mesh_names, MESH_LIST or split_key)
 
 # Build outfpath
 outfpath = TRAIN_DIR + '/shape_completion/evaluation/'
 os.makedirs(outfpath, exist_ok=True)
 mode_name = "encoder" if fast_mode else "2phase"
 summary_df_fpath = outfpath + f"{mode_name}_{split}{tag}_chamfer.csv"
-write_header = not os.path.exists(summary_df_fpath)
-csv_file = open(summary_df_fpath, 'a', newline='')
-if write_header:
-    csv_file.write("mesh,chamfer,gt_path\n")
+COLS = ["mesh", "chamfer", "gt_path",
+        "intact_frac", "chamfer_intact", "l1_intact", "chamfer_filled", "l1_filled",
+        "chamfer_shape", "intact_frac_shape", "chamfer_intact_shape", "l1_intact_shape", "chamfer_filled_shape", "l1_filled_shape"]
+csv_file = open(summary_df_fpath, 'w', newline='')   # new file each run, rows appended below
+csv_file.write(",".join(COLS) + "\n")
 print(f"\nSaving results to: {summary_df_fpath}")
 
 # Loop through meshes using best parameters from grid search
@@ -145,10 +160,10 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
             # Fast mode: one-shot encoder instead of full latent optimization 
             print("\n-----Fast mode: encoding latent (single forward pass)----\n")
             latent_opt = encode_latent_pointnet(encoder_ckpt, points, sdf_vals, device)
-            if best_cfg['refine_iters'] > 0:
-                print(f"Refining encoder latent for {best_cfg['refine_iters']} iters (lr={best_cfg['lr']}, lambda={best_cfg['lambda_reg']})...")
+            if best_cfg['iters'] > 0:
+                print(f"Refining encoder latent for {best_cfg['iters']} iters (lr={best_cfg['lr']}, lambda={best_cfg['lambda_reg']})...")
                 latent_opt, _ = optimize_latent_partial(model, points.squeeze(), sdf_vals, config['latent_size'], latent_init=latent_opt, top_k=best_cfg['top_k'],
-                                                        iters=best_cfg['refine_iters'], lr=best_cfg['lr'], lambda_reg=best_cfg['lambda_reg'], clamp_val=None, 
+                                                        iters=best_cfg['iters'], lr=best_cfg['lr'], lambda_reg=best_cfg['lambda_reg'], clamp_val=None,
                                                         latent_std=best_cfg['latent_std'], scheduler_step=800, 
                                                         scheduler_gamma=0.7, batch_inference_size=32768, multi_stage=True, device=device)        
 
@@ -176,23 +191,32 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         gt = pv.read(gt_path).triangulate().extract_surface(algorithm=None)
         cd = chamfer_distance(pred, gt, n_samples=20000)
         print(f"\n{os.path.basename(pm_path)} Chamfer={cd:.4f}\n") 
+        regions = {}
+        if FOSSIL_DIR:
+            label_path = os.path.join(LABEL_DIR, os.path.basename(pm_path).replace("_hollow_cut", "").replace("_align", ""))
+            regions = region_errors(pred, gt, label_path)                            # intact / filled
+            pred_shape = undo_pose_error(pred, pm_path, label_path)                  # alignment error removed
+            regions["chamfer_shape"] = chamfer_distance(pred_shape, gt, n_samples=20000)
+            regions.update({k + "_shape": v for k, v in region_errors(pred_shape, gt, label_path).items()})
+            print({k: round(float(v), 4) for k, v in regions.items()})
         # Log results to csv
-        row = pd.DataFrame([{'mesh': os.path.basename(pm_path), 'chamfer': cd, 'gt_path': gt_path}])
-        row.to_csv(csv_file, index=False, header=False)
+        row = pd.DataFrame([{'mesh': os.path.basename(pm_path), 'chamfer': cd, 'gt_path': gt_path, **regions}])
+        row.reindex(columns=COLS).to_csv(csv_file, index=False, header=False)
         csv_file.flush()
 
     except Exception as e:
         print(f"\033[31mERROR processing {os.path.basename(pm_path)}: {e}\033[0m")
         # Log results to csv
         row = pd.DataFrame([{'mesh': os.path.basename(pm_path), 'chamfer': None, 'gt_path': gt_path}])
-        row.to_csv(csv_file, index=False, header=False)
+        row.reindex(columns=COLS).to_csv(csv_file, index=False, header=False)
         csv_file.flush()
         continue
 
 # Save results
 csv_file.close()
 summary_df = pd.read_csv(summary_df_fpath)
-print(f"\nMean Chamfer across {len(summary_df)} meshes: {summary_df['chamfer'].mean():.4f}")
+print(f"\nMedians across {summary_df['chamfer'].notna().sum()} of {len(summary_df)} meshes:")
+print(summary_df.drop(columns=["mesh", "gt_path"]).median().round(4).to_string())
 print("Outputs logged to: ", summary_df_fpath)
 
 sys.stdout.flush()

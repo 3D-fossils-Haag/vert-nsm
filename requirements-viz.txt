@@ -1,0 +1,10 @@
+# Extras for notebooks (demos/, paper/, data_viz/, inspect_*.ipynb) and figure scripts.
+#   pip install -r requirements.txt -r requirements-viz.txt
+jupyter
+ipywidgets
+itkwidgets              # interpolate_landmarks.ipynb
+glass-box-umap          # data_viz/glassboxUMAP.ipynb
+
+# align_fossil_morphoweave.py also needs rustcpd==4.0.0 plus the SlicerMorphoWeave
+# ShapeCompletion source (set MW_PYTHON in that script):
+#   pip install rustcpd==4.0.0

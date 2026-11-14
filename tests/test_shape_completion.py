@@ -9,7 +9,15 @@ import torch
 import pyvista as pv
 
 # Configure paths so imports succeed
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+import pytest
+
+# shape_completion_slicer.py imports `slicer` and `tiny3d`, which only exist inside
+# 3D Slicer's bundled Python. Skip this whole file anywhere else (local pytest, CI).
+pytest.importorskip("slicer", reason="needs the 3D Slicer Python environment")
+pytest.importorskip("tiny3d", reason="needs tiny3d (installed inside 3D Slicer)")
+pytestmark = pytest.mark.slicer
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 NSM_PATH = os.path.join(PROJECT_ROOT, 'NSM')

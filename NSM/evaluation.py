@@ -10,6 +10,7 @@ import time
 import pyvista as pv
 from NSM.optimization import normalize_mesh, get_norm_params, get_top_k_pcs, build_sdf_dataset, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, optimize_latent_partial
 from NSM.helper_funcs import convert_ply_to_vtk
+from NSM.alignment import undo_pose_error, snap_to_partial
 import glob
 import sys
 from collections import namedtuple
@@ -70,6 +71,42 @@ def chamfer_distance(pm, gt, n_samples=20000):
     d2 = t2.query(sp, k=1)[0].mean()
     return float(0.5*(d1 + d2)) # Return average distance (symmetric penalty)
 
+def gt_intact_mask(gt_pts, fossil_path, tol=0.01, iters=30):
+    fos = pv.read(fossil_path)
+    fv = np.asarray(fos.points)
+    broken = np.asarray(fos.point_data["broken"]).astype(bool)
+    tree = cKDTree(fv)
+    A, t = np.eye(3), fv.mean(0) - gt_pts.mean(0)
+    for _ in range(iters):
+        d, j = tree.query(gt_pts @ A.T + t)
+        keep = d <= np.quantile(d, 0.6)                  # ignore missing parts while fitting
+        sol = np.linalg.lstsq(np.c_[gt_pts[keep], np.ones(keep.sum())], fv[j[keep]], rcond=None)[0]
+        A, t = sol[:3].T, sol[3]
+    d, j = tree.query(gt_pts @ A.T + t)
+    size = np.linalg.norm(np.ptp(gt_pts, axis=0))
+    return (d < tol * size) & ~broken[j]
+
+def region_errors(compl, gt, fossil_path, n_samples=20000, offset=0.01, seed=0):
+    gt = gt.extract_surface(algorithm=None).triangulate().compute_normals(point_normals=True, auto_orient_normals=True)
+    compl = compl.extract_surface(algorithm=None).triangulate()
+    sg = np.asarray(uniform_surface_sample(gt, n_samples))
+    sp = np.asarray(uniform_surface_sample(compl, n_samples))
+    intact = gt_intact_mask(sg, fossil_path)
+    d_gc = cKDTree(sp).query(sg)[0]                      # GT -> completion
+    d_cg, j = cKDTree(sg).query(sp)                      # completion -> GT; region of nearest GT sample
+    c_intact = intact[j]
+    normals = gt.point_normals[cKDTree(np.asarray(gt.points)).query(sg)[1]]
+    size = np.linalg.norm(np.ptp(sg, axis=0))
+    rng = np.random.default_rng(seed)
+    probe = pv.PolyData(sg + normals * rng.normal(0, offset * size, (len(sg), 1)))
+    l1 = np.abs(np.asarray(probe.compute_implicit_distance(gt)["implicit_distance"])
+                - np.asarray(probe.compute_implicit_distance(compl)["implicit_distance"]))
+    out = {"intact_frac": intact.mean()}
+    for name, g, c in [("intact", intact, c_intact), ("filled", ~intact, ~c_intact)]:
+        out[f"chamfer_{name}"] = 0.5 * (d_gc[g].mean() + d_cg[c].mean()) if g.any() and c.any() else np.nan
+        out[f"l1_{name}"] = l1[g].mean() if g.any() else np.nan
+    return out
+
 # Load in best_cfg from shape_completion_grid_search.py (or manually enter)
 def load_best_cfg_from_csv(csv_path, fast_mode, device):
     df = pd.read_csv(csv_path)
@@ -85,7 +122,7 @@ def load_best_cfg_from_csv(csv_path, fast_mode, device):
     if fast_mode:
         clamp = None if pd.isna(best_row["clamp"]) else best_row["clamp"]
         best_cfg = {'top_k': int(best_row["top_k"]),
-                    'refine_iters': int(best_row["iters"]),
+                    'iters': int(best_row["iters"]),
                     'lr': float(best_row["lr"]),
                     'lambda_reg': float(best_row["lambda_reg"]),
                     'clamp': clamp,
@@ -93,8 +130,8 @@ def load_best_cfg_from_csv(csv_path, fast_mode, device):
                     'sched_step': int(best_row["sched_step"]),
                     'sched_gamma': float(best_row["sched_gamma"]),
                     'batch_infer': int(best_row["batch_infer"]),
-                    'gridN': int(best_row["gridN"])}
-
+                    'gridN': 256, 
+                    'n_samples': None if pd.isna(best_row.get("n_samples", np.nan)) else int(best_row["n_samples"])}
     else:
         clamp2 = None if pd.isna(best_row["clamp2"]) else best_row["clamp2"]
         best_cfg = {"top_k":       int(best_row["top_k"]),
@@ -111,13 +148,13 @@ def load_best_cfg_from_csv(csv_path, fast_mode, device):
                     "sched_gamma1": float(best_row["sched_gamma1"]),
                     "sched_gamma2": float(best_row["sched_gamma2"]),
                     "batch_infer": int(best_row["batch_infer"]),
-                    "gridN":       int(best_row["gridN"])}
+                    "gridN":       256}
 
     print(f"\nLoaded best_cfg from CSV (min mean_cd = {best_row['mean_cd']:.4f}):")
     return best_cfg
 
 # Random search on a small validation subset to pick best cfg
-def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None):
+def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False):
     # Set up directory for fine-tuning experiemnts
     os.makedirs(out_dir, exist_ok=True)
     val_subset = random.sample(pairs, min(valN, len(pairs)))
@@ -145,9 +182,11 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
             'sched_gamma1': random.choice([0.7, 0.9]),
             'sched_gamma2': random.choice([0.5, 0.7, 0.9]),
             'batch_infer': random.choice([32768]),
-            'gridN': random.choice([128, 256]),}
+            'gridN': 128}
         scores = []
+        shape_scores = []
         times = []
+        region_rows = []    
         # Set up directory for each trial
         trial_dir = os.path.join(out_dir, f"trial_{t:02d}")
         os.makedirs(trial_dir, exist_ok=True)
@@ -171,6 +210,8 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
             # Normalize and scale output using model config training params
             center, max_radius = get_norm_params(sdf_dataset, sample_dict, pred_path)
             mesh_pv = normalize_mesh(mesh_out, pred_path, config, center, max_radius)
+            if snap:
+                mesh_pv = snap_to_partial(mesh_pv, np.asarray(pv.read(pred_path).points, float)[::5])
             
             # Save to file
             mesh_pv = mesh_pv.clean().triangulate()
@@ -189,6 +230,16 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
             mesh_time = time.time() - start
             scores.append(cd)
             times.append(mesh_time)
+            if label_dir:
+                label_path = os.path.join(label_dir, os.path.basename(pred_path).replace("_hollow_cut", "").replace("_align", ""))
+                if os.path.exists(label_path):
+                    region_rows.append(region_errors(compl, gt, label_path, n_samples=5000))
+                else:
+                    print(f"No label file {label_path}; skipping region scores for this mesh")
+            # Shape-only chamfer (alignment error removed using the unperturbed copy)
+            if ref_dir:
+                ref_path = os.path.join(ref_dir, os.path.basename(pred_path).replace("_align", ""))
+                shape_scores.append(chamfer_distance(undo_pose_error(compl, pred_path, ref_path), gt, n_samples=5000))
 
         # Get mean chamfer for all meshes from trial
         mean_cd = float(np.mean(scores))
@@ -196,8 +247,9 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
             best = {'score': mean_cd, 'cfg': trial_cfg}
         # Append the current trial's results to the list
         mean_time = float(np.mean(times))
-        rows.append({'trial': t, 'mean_cd': mean_cd, 'mean_time': mean_time, **trial_cfg})
-        # Save results to csv
+        mean_cd_shape = float(np.mean(shape_scores)) if shape_scores else np.nan
+        region_means = pd.DataFrame(region_rows).mean().add_prefix("mean_").to_dict() if region_rows else {}
+        rows.append({'trial': t, 'mean_cd': mean_cd, 'mean_cd_shape': mean_cd_shape, 'mean_time': mean_time, **region_means, **trial_cfg, 'n_samples': 240, 'cd_n_samples': 5000})
         if log_path_csv is not None:
             pd.DataFrame(rows).to_csv(log_path_csv, index=False)
     print(f"Best cfg: {best['cfg']} (mean Chamfer={best['score']:.4f})")
@@ -207,7 +259,7 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
     return best['cfg'], rows
 
 # Random search on a small validation subset to pick best cfg
-def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device, encoder_ckpt, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None):
+def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device, encoder_ckpt, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False):
     # Set up directory for fine-tuning experiemnts
     os.makedirs(out_dir, exist_ok=True)
     val_subset = random.sample(pairs, min(valN, len(pairs)))
@@ -230,9 +282,12 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
             'sched_step': random.choice([100, 200, 300]),
             'sched_gamma': random.choice([0.5, 0.7, 0.9]),
             'batch_infer': random.choice([32768]),
-            'gridN': random.choice([128, 256])}
+            'gridN': 128,
+            'n_samples': random.choice([None, 240, 1000, 5000])}   # SDF samples used for refinement (None = all)}
         scores = []
+        shape_scores = []
         times = []
+        region_rows = []
 
         # Set up directory for each trial
         trial_dir = os.path.join(out_dir, f"trial_{t:02d}")
@@ -245,7 +300,7 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
                 _, pred_path = convert_ply_to_vtk(pred_path, save=True)
             
             # Build SDF dataset
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(pred_path, config, n_samples=None) # Use all points instead of downsampling by n_samples
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(pred_path, config, n_samples=trial_cfg['n_samples']) # Use all points instead of downsampling by n_samples
             
             # Fast mode: one-shot encoder instead of full latent optimization 
             print("\n-----Fast mode: encoding latent (single forward pass)----\n")
@@ -262,6 +317,8 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
             # Normalize and scale output using model config training params
             center, max_radius = get_norm_params(sdf_dataset, sample_dict, pred_path)
             mesh_pv = normalize_mesh(mesh_out, pred_path, config, center, max_radius)
+            if snap:
+                mesh_pv = snap_to_partial(mesh_pv, np.asarray(pv.read(pred_path).points, float)[::5])
             
             # Save to file
             mesh_pv = mesh_pv.clean().triangulate()
@@ -280,6 +337,16 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
             mesh_time = time.time() - start
             scores.append(cd)
             times.append(mesh_time)
+            if label_dir:
+                label_path = os.path.join(label_dir, os.path.basename(pred_path).replace("_hollow_cut", "").replace("_align", ""))
+                if os.path.exists(label_path):
+                    region_rows.append(region_errors(compl, gt, label_path, n_samples=5000))
+                else:
+                    print(f"No label file {label_path}; skipping region scores for this mesh")
+            # Shape-only chamfer (alignment error removed using the unperturbed copy)
+            if ref_dir:
+                ref_path = os.path.join(ref_dir, os.path.basename(pred_path).replace("_align", ""))
+                shape_scores.append(chamfer_distance(undo_pose_error(compl, pred_path, ref_path), gt, n_samples=5000))
 
         # Get mean chamfer for all meshes from trial
         mean_cd = float(np.mean(scores))
@@ -287,8 +354,9 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
             best = {'score': mean_cd, 'cfg': trial_cfg}
         # Append the current trial's results to the list
         mean_time = float(np.mean(times))
-        rows.append({'trial': t, 'mean_cd': mean_cd, 'mean_time': mean_time, **trial_cfg})
-        # Save results to csv
+        mean_cd_shape = float(np.mean(shape_scores)) if shape_scores else np.nan
+        region_means = pd.DataFrame(region_rows).mean().add_prefix("mean_").to_dict() if region_rows else {}
+        rows.append({'trial': t, 'mean_cd': mean_cd, 'mean_cd_shape': mean_cd_shape, 'mean_time': mean_time, **region_means, **trial_cfg, 'multi_stage': True, 'encoder_ckpt': encoder_ckpt, 'cd_n_samples': 5000})
         if log_path_csv is not None:
             pd.DataFrame(rows).to_csv(log_path_csv, index=False)
     print(f"Best cfg: {best['cfg']} (mean Chamfer={best['score']:.4f})")

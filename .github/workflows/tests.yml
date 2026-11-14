@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"   # matches the conda env in README.md
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install system graphics libraries
+        # VTK / open3d need OpenGL and EGL even when nothing is drawn on screen
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxrender1
+
+      - name: Install CPU-only PyTorch
+        # The default PyPI torch wheel bundles CUDA (several GB); CI only needs CPU.
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project + test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        # Slicer-only tests (tests/test_shape_completion.py) skip automatically here.
+        run: pytest

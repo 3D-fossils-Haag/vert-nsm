@@ -10,6 +10,7 @@ import torch
 from NSM.helper_funcs import get_sdfs, NumpyTransform  
 from NSM.datasets import SDFSamples
 from NSM.mesh import create_mesh
+from scipy.spatial import cKDTree
 
 import pyvista as pv
 try:
@@ -432,14 +433,12 @@ def reconstruct_mesh_from_latent(mesh_fpath, model, latent_vec, config, device='
     scale = 1.0
     icp_transform = NumpyTransform(np.eye(4))
     objects = 1
-
     # Reconstruct the novel mesh
     with torch.no_grad():
         mesh_out = create_mesh(decoder=model, latent_vector=latent_vec, n_pts_per_axis=n_pts_per_axis,
                                 voxel_origin=voxel_origin, voxel_size=voxel_size, path_original_mesh=mesh_fpath,
                                 offset=offset, scale=scale, icp_transform=icp_transform, objects=objects,
                                 verbose=True, device=device, scale_to_original_mesh=False) 
-        
     return mesh_out
 
 def encode_latent_pointnet(encoder_ckpt, points_full, sdf_full, device, surf_thresh=0.01):

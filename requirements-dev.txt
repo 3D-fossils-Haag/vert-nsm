@@ -1,0 +1,3 @@
+# Everything needed to run the test suite:  pip install -r requirements-dev.txt && pytest
+-r requirements.txt
+pytest

@@ -15,8 +15,9 @@ from pathlib import Path
 from NSM.helper_funcs import (NumpyTransform, pv_to_o3d, load_config, render_cameras,
                               load_model_and_latents, generate_and_render_mesh)
 from NSM.morphometrics import gm_prcomp, pc_shape
-from NSM.plotting import (load_mrk_json, view_rotation, make_renderers, make_material,
+from NSM.plotting import (view_rotation, make_renderers, make_material,
                           warp_mesh, crop_top_right)
+from NSM.alignment import load_mrk_json
 from NSM.traverse_latents import generate_latent_path_plot
 
 # ── Config ───────────────────────────────────────────────────────────────────
