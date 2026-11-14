@@ -1,28 +1,48 @@
-mskt
-scikit-learn  
-scipy  
-numpy  
-torch   
-torchaudio  
-torchvision  
-tqdm   
-typing-extensions
+# Core dependencies: training, reconstruction / shape completion, classification,
+# evaluation, fossilize.py and the hierarchy/ + encoder/ packages.
+#
+# Install PyTorch first (see README) so you get the right CUDA build, then:
+#   pip install -r requirements.txt
+#
+# Notebooks, data_viz/ and paper/ figures need extras: requirements-viz.txt
+# Running the tests: requirements-dev.txt
+# The 3D Slicer module (FossilNsmModule/) installs its own dependencies inside Slicer.
 
-nibabel
-scikit-learn
-metric_learn
-wandb
-matplotlib
-
-# Requirements for sinkhorn (a wasserstein distance/earth movers distance algorithm)
-# https://github.com/fwilliams/scalable-pytorch-sinkhorn
-pykeops 
-tqdm
-
-# pytorch_scatter
-# https://github.com/rusty1s/pytorch_scatter
+# --- deep learning ---
+torch
 einops
-scikit-image
+schedulefree            # NSM/utils.py (optional optimizer)
+
+# --- numerics / ML ---
+numpy
+scipy
+scikit-learn
 pandas
-pymeshfix
+metric-learn            # hierarchy/metric_learning.py
+umap-learn              # NSM/plotting.py, hierarchy/visualize.py
+
+# --- meshes / geometry ---
+mskt                    # imported as pymskt
 pyvista
+vtk
+pymeshfix
+point-cloud-utils       # NSM/datasets/sdf_dataset.py
+trimesh                 # fossilize.py, preprocess_fossilized.py
+scikit-image
+open3d; python_version < "3.13"   # optional in NSM/; no wheels yet for 3.13+
+pykeops                 # NSM/dependencies/sinkhorn.py (Wasserstein / EMD)
+nibabel
+
+# --- plotting / images (imported by NSM/helper_funcs.py and NSM/plotting.py) ---
+matplotlib
+seaborn                 # hierarchy/ reports and plots
+plotly
+statsmodels
+opencv-python
+pillow
+
+# --- utilities ---
+tqdm
+pympler                 # NSM/datasets/sdf_dataset.py (memory reporting)
+wandb                   # training logs
+typing-extensions

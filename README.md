@@ -14,8 +14,8 @@ This code uses generative deep learning models to understand the skeletal anatom
 conda create -n NSM python=3.10
 conda activate NSM
 
-# Install pytorch and dependencies
-conda install pytorch=2.5.1 torchvision=0.20.1 torchaudio=2.5.1 pytorch-cuda=12.4 -c pytorch -c nvidia -c conda-forge -c defaults
+# Install pytorch first, so you get the CUDA build that matches your GPU
+conda install pytorch=2.5.1 pytorch-cuda=12.4 -c pytorch -c nvidia -c conda-forge -c defaults
 
 # Install NSM
 mkdir NSM
@@ -26,6 +26,29 @@ python -m pip install -r requirements.txt
 pip install -e .
 
 ```
+
+**Optional extras**
+
+| To... | Run |
+|---|---|
+| Use the notebooks (`demos/`, `paper/`, `data_viz/`) | `pip install -r requirements-viz.txt` |
+| Run the tests | `pip install -r requirements-dev.txt` |
+| Use `align_fossil_morphoweave.py` | `pip install rustcpd==4.0.0` and set `MW_PYTHON` in the script to your SlicerMorphoWeave source |
+
+The **3D Slicer module** (`FossilNsmModule/`) runs in Slicer's own Python and installs what it needs the first time it loads, so you don't need to install anything into Slicer by hand.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest                      # everything (about 20 s on CPU, no GPU or data needed)
+pytest tests/test_alignment.py -v
+pytest -m "not slow"
+```
+
+Tests live in `tests/` (NSM core, the Slicer worker scripts, import checks) and `hierarchy/tests/`. They use small synthetic meshes and tensors, so they don't need `vertebrae_meshes/` or a trained model. `tests/test_shape_completion.py` needs Slicer's Python (`slicer`, `tiny3d`) and is skipped elsewhere. GitHub Actions runs the suite on every push and pull request (`.github/workflows/tests.yml`).
+
+Tests marked `xfail` are known bugs: they're expected to fail until the bug is fixed. Once you fix one, its test will fail and remind you to delete the marker.
 # Demos
 Check out our demos to build NSM fully in the Google Colab runtime environment and interactively evaluate our tools with demo data in under 10 minutes, no need to connect to your Google Drive!
 

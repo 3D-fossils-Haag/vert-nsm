@@ -8,9 +8,9 @@ import re
 import torch
 import time
 import pyvista as pv
-from NSM.optimization import normalize_mesh, get_norm_params, get_top_k_pcs, build_sdf_dataset, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, optimize_latent_partial, snap_to_partial
+from NSM.optimization import normalize_mesh, get_norm_params, get_top_k_pcs, build_sdf_dataset, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, optimize_latent_partial
 from NSM.helper_funcs import convert_ply_to_vtk
-from NSM.alignment import undo_pose_error
+from NSM.alignment import undo_pose_error, snap_to_partial
 import glob
 import sys
 from collections import namedtuple

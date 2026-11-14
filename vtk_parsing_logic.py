@@ -43,14 +43,3 @@ def parse_vtk_filename(path):
         'genus':   parts[1] if len(parts) > 1 else None,
         'species': parts[2] if len(parts) > 2 else None,
     }
-
-
-def add_filename_exception(pattern, replacement):
-    """
-    Add a new filename exception pattern.
-
-    Args:
-        pattern: str, the pattern to match (e.g., 'genus-species')
-        replacement: str, the corrected pattern (e.g., 'genus_species')
-    """
-    FILENAME_EXCEPTIONS[pattern] = replacement

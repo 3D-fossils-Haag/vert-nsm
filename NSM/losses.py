@@ -51,7 +51,7 @@ def eikonal_loss(
             inputs=points,
             grad_outputs=torch.ones_like(surf_sdf),
             create_graph=create_graph,
-            retain_graph=True if surf_idx < n_surfaces - 1 else False,
+            retain_graph=create_graph or surf_idx < n_surfaces - 1,
             only_inputs=True
         )[0]  # (B, 3)
         
@@ -125,7 +125,7 @@ def compute_sdf_gradients(
             inputs=points,
             grad_outputs=torch.ones_like(surf_sdf),
             create_graph=True,
-            retain_graph=False,
+            retain_graph=True,
             only_inputs=True
         )[0]  # (B, 3)
         
@@ -145,7 +145,7 @@ def compute_sdf_gradients(
                 inputs=points,
                 grad_outputs=torch.ones_like(surf_sdf),
                 create_graph=True,
-                retain_graph=i < n_surfaces - 1,
+                retain_graph=True,
                 only_inputs=True
             )[0]  # (B, 3)
             all_gradients.append(gradients)
