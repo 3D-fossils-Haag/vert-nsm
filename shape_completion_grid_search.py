@@ -144,7 +144,7 @@ else:
                                         log_path_csv=OUTDIR + "/trial_scores.csv",
                                         label_dir=LABEL_DIR if fossils else None, 
                                         ref_dir=base if fossils and perturbed else None, 
-                                        snape=SNAP)
+                                        snap=SNAP)
 # Build inference subset
 n_final = min(N_FINAL_INF, len(pairs))
 if n_final < N_FINAL_INF:
