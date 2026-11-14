@@ -2,10 +2,13 @@
 """
 fossilize.py: turn modern vertebra meshes into fossil-like meshes.
 
-    python fossilize.py modern.ply fossil.ply --seed 7
-    python fossilize.py modern/ fossils/ -n 20 --variants 3 --workers 2
-    python fossilize.py modern/ fossils/ --set p_major=0.8 --set rough=0.5
-    python fossilize.py --settings                 # list every setting
+    python paper_fossils/fossilize.py modern.ply fossil.ply --seed 7
+    python paper_fossils/fossilize.py vertebrae_meshes/ fossilized/ -n 20 --variants 3 --workers 2
+    python paper_fossils/fossilize.py vertebrae_meshes/ fossilized/ --set p_major=0.8 --set rough=0.5
+    python paper_fossils/fossilize.py --settings                 # list every setting
+
+Run from the repo root. Folder mode writes fossilized/fossilize_log.csv, which
+align_fossil_morphoweave.py reads for each fossil's completeness.
 
 Each bone gets a random mix of effects (breaks, wear, texture, deformation,
 surface cracks); every tunable lives in SETTINGS below.

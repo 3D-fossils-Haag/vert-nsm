@@ -1,41 +1,44 @@
+
 #!/usr/bin/env python3
 """
-prep_nsm.py: prepare fossil meshes for NSM shape completion, automating the
+preprocess_fossilized.py: prepare fossil meshes for NSM shape completion, automating the
 3D Slicer Segment Editor steps, including cutting away broken surface.
-
-    python preprocess_fossilized.py fossil.vtk fossil_hollow_cut.vtk
-    python preprocess_fossilized.py fossilized/ fossilized_preprocessed/ --workers 8           # a whole folder
-    python preprocess_fossilized.py fossil.vtk out.vtk --intact modern.vtk        # fossil saved without labels
-
+ 
+    python paper_fossils/preprocess_fossilized.py fossil.vtk fossil_hollow_cut.vtk
+    python paper_fossils/preprocess_fossilized.py fossilized/ fossilized_preprocessed/ --workers 8   # a whole folder
+    python paper_fossils/preprocess_fossilized.py fossil.vtk out.vtk --intact modern.vtk            # fossil saved without labels
+ 
+Run from the repo root.
+ 
 Steps, in voxels (defaults match the manual workflow):
     labelmap -> grow margin 3 -> smooth 6 -> fill holes 6 -> hollow (medial
     surface, shell 3) -> cut away the shell over broken surface (thin cracks
     are left) -> drop specks under 1000 voxels -> surface mesh
-
+ 
 Which surface is broken comes from the 'broken' label fossilize.py saves with
 each output. For fossils made before that existed, pass --intact (the modern
 mesh it was made from): it is fitted onto the fossil (allowing shear and
 squashing) and surface far from it is treated as broken.
-
+ 
 Requires: numpy scipy trimesh scikit-image (vtk for .vtk), and fossilize.py
 in the same folder.
 """
 from __future__ import annotations
-
+ 
 import argparse
 import os
 import sys
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
+ 
 import numpy as np
 import trimesh
 from scipy import ndimage
 from scipy.spatial import cKDTree
-
+ 
 from fossilize import MESH_EXTS, load_mesh, save_mesh
-
+ 
 # all sizes in voxels unless noted
 DEFAULTS = dict(
     voxels=220,        # voxels across the bone's longest side (sets the voxel size)
@@ -48,8 +51,8 @@ DEFAULTS = dict(
     min_island=1000,   # keep every piece of shell at least this big, not just the largest
     tol=0.015,         # --intact only: surface farther than this (x bone size) is broken
 )
-
-
+ 
+ 
 # ----------------------------------------------------------------------------
 # Broken-surface labels
 # ----------------------------------------------------------------------------
@@ -84,8 +87,8 @@ def labels_from_intact(fossil, intact, tol=0.015, max_angle=45, iters=40):
     for _ in range(3):
         broken = (L @ broken.astype(float)) > 0
     return broken.astype(np.uint8)
-
-
+ 
+ 
 # ----------------------------------------------------------------------------
 # The Segment Editor steps
 # ----------------------------------------------------------------------------
@@ -93,8 +96,8 @@ def _ball_close(occ, r):
     """Morphological closing with a ball of radius r voxels (fills holes/gaps)."""
     dil = ndimage.distance_transform_edt(~occ) <= r
     return ndimage.distance_transform_edt(dil) > r
-
-
+ 
+ 
 def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, cut_margin=2,
             min_width=8, min_island=1000, **_):
     """Run the preprocessing on one mesh. `broken` is a per-vertex 0/1 label.
@@ -104,7 +107,7 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
     vox = mesh.voxelized(pitch).fill()
     occ = np.pad(vox.matrix, pad)
     origin = vox.transform[:3, 3] - pad * pitch               # world position of voxel (0,0,0)
-
+ 
     occ = ndimage.distance_transform_edt(~occ) <= margin      # grow margin
     k = smooth + (smooth % 2 == 0)                            # median of a binary = majority
     occ = ndimage.uniform_filter(occ.astype(np.float32), size=k) > 0.5
@@ -114,7 +117,7 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
     inner = shell // 2 + shell % 2
     hollow = (occ & (d_in <= inner)) | (~occ & (d_out <= shell - inner))
     n_hollow = int(hollow.sum())
-
+ 
     n_cut = 0
     if broken is not None and np.any(broken):
         broken = np.asarray(broken).astype(bool)
@@ -133,13 +136,13 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
         cut = hollow & (ndimage.distance_transform_edt(~cut) <= cut_margin)   # then reach past the rim
         hollow &= ~cut
         n_cut = int(cut.sum())
-
+ 
     lab, n = ndimage.label(hollow, structure=np.ones((3, 3, 3)))
     if n == 0:
         raise ValueError("nothing left after cutting")
     sizes = np.bincount(lab.ravel())[1:]
     keep = np.isin(lab, 1 + np.flatnonzero(sizes >= min(min_island, sizes.max())))  # drop specks only
-
+ 
     from skimage.measure import marching_cubes
     field = ndimage.gaussian_filter(keep.astype(np.float32), 0.6)   # gentle, like Slicer's surface smoothing
     verts, faces, _, _ = marching_cubes(field, 0.5)
@@ -149,8 +152,8 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
                 cut_pct=round(100 * n_cut / max(n_hollow, 1), 1), islands=n,
                 kept_pct=round(100 * sizes.max() / max(sizes.sum(), 1), 1))
     return out, info
-
-
+ 
+ 
 # ----------------------------------------------------------------------------
 # Files, folders, command line
 # ----------------------------------------------------------------------------
@@ -172,8 +175,8 @@ def _one(job):
                f"voxel {info['voxel_size']:.4g}{note}"
     except Exception as e:  # noqa: BLE001
         return f"ERROR {os.path.basename(src)}: {type(e).__name__}: {e}"
-
-
+ 
+ 
 def main():
     p = argparse.ArgumentParser(description="Prepare fossil meshes for NSM: hollow shell with broken "
                                             "surface cut away (automates the Slicer steps).")
@@ -187,7 +190,7 @@ def main():
     p.add_argument("--suffix", default="_hollow_cut", help="added to output names in folder mode")
     a = p.parse_args()
     opts = {k: getattr(a, k) for k in DEFAULTS}
-
+ 
     if not os.path.isdir(a.input):
         print(_one((a.input, a.output, a.intact, opts)))
         return
@@ -214,7 +217,7 @@ def main():
     else:
         for j in jobs:
             print(_one(j), flush=True)
-
-
+ 
+ 
 if __name__ == "__main__":
     main()

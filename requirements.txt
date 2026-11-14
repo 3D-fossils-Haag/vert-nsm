@@ -20,6 +20,8 @@ scikit-learn
 pandas
 metric-learn            # hierarchy/metric_learning.py
 umap-learn              # NSM/plotting.py, hierarchy/visualize.py
+pyarrow                 # .parquet output (perturb_align_scale_fossils.py sufficiency)
+manifold3d              # trimesh boolean engine, for fossilize.py breaks
 
 # --- meshes / geometry ---
 mskt                    # imported as pymskt
