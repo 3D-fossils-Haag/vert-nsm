@@ -18,6 +18,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
 
+      - name: Install system graphics libraries
+        # VTK / open3d need OpenGL and EGL even when nothing is drawn on screen
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxrender1
+
       - name: Install CPU-only PyTorch
         # The default PyPI torch wheel bundles CUDA (several GB); CI only needs CPU.
         run: |
