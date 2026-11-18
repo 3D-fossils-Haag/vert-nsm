@@ -33,6 +33,7 @@ trimesh                 # fossilize.py, preprocess_fossilized.py
 scikit-image
 open3d; python_version < "3.13"   # optional in NSM/; no wheels yet for 3.13+
 pykeops                 # NSM/dependencies/sinkhorn.py (Wasserstein / EMD)
+pynrrd>=1.0
 nibabel
 
 # --- plotting / images (imported by NSM/helper_funcs.py and NSM/plotting.py) ---

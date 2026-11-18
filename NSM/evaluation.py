@@ -10,7 +10,7 @@ import time
 import pyvista as pv
 from NSM.optimization import normalize_mesh, get_norm_params, get_top_k_pcs, build_sdf_dataset, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, optimize_latent_partial
 from NSM.helper_funcs import convert_ply_to_vtk
-from NSM.alignment import undo_pose_error, snap_to_partial
+from NSM.fossils import undo_pose_error, snap_to_partial, mask_broken_region
 import glob
 import sys
 from collections import namedtuple
@@ -157,7 +157,7 @@ def load_best_cfg_from_csv(csv_path, fast_mode, device, select_by="mean_cd"):
     return best_cfg
 
 # Random search on a small validation subset to pick best cfg
-def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False, select_by="mean_cd"):
+def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False, select_by="mean_cd", mask_broken=False):
     # Set up directory for fine-tuning experiemnts
     os.makedirs(out_dir, exist_ok=True)
     val_subset = random.sample(pairs, min(valN, len(pairs)))
@@ -198,8 +198,13 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
             start = time.time()
             if '.ply' in pred_path:
                 _, pred_path = convert_ply_to_vtk(pred_path, save=True)
+
             # Build SDF dataset
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(pred_path, config, n_samples=240)
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(pred_path, config, n_samples=None if mask_broken else 240)
+            if mask_broken:   # only keep SDF samples from intact surface
+                center, max_radius = get_norm_params(sdf_dataset, sample_dict, pred_path)
+                points, sdf_vals = mask_broken_region(points, sdf_vals, pred_path, center, max_radius, 240)
+
             # Encode latent via 2 stage optimization (auto-decoder framework)
             latent_opt = encode_latent(decoder=model, points=points.squeeze(), sdf_vals=sdf_vals, latent_dim=latent_codes.shape[1], 
                                mean_latent=mean_latent, latent_codes=latent_codes, top_k_reg=trial_cfg['top_k'], latent_std=trial_cfg['latent_std'],
@@ -213,9 +218,14 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
             # Normalize and scale output using model config training params
             center, max_radius = get_norm_params(sdf_dataset, sample_dict, pred_path)
             mesh_pv = normalize_mesh(mesh_out, pred_path, config, center, max_radius)
+
             if snap:
-                mesh_pv = snap_to_partial(mesh_pv, np.asarray(pv.read(pred_path).points, float)[::5])
-            
+                fos = pv.read(pred_path)
+                fpts = np.asarray(fos.points, float)
+                if mask_broken and "broken" in fos.point_data:   # snap onto intact surface only
+                    fpts = fpts[np.asarray(fos.point_data["broken"]) == 0]
+                mesh_pv = snap_to_partial(mesh_pv, fpts[::5])
+
             # Save to file
             mesh_pv = mesh_pv.clean().triangulate()
             for arr in ['RegionId', 'vtkOriginalCellIds']:
@@ -265,7 +275,7 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
     return best['cfg'], rows
 
 # Random search on a small validation subset to pick best cfg
-def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device, encoder_ckpt, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False, select_by="mean_cd"):
+def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device, encoder_ckpt, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False, select_by="mean_cd", mask_broken=False):
     # Set up directory for fine-tuning experiemnts
     os.makedirs(out_dir, exist_ok=True)
     val_subset = random.sample(pairs, min(valN, len(pairs)))
@@ -306,7 +316,10 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
                 _, pred_path = convert_ply_to_vtk(pred_path, save=True)
             
             # Build SDF dataset
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(pred_path, config, n_samples=trial_cfg['n_samples']) # Use all points instead of downsampling by n_samples
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(pred_path, config, n_samples=None if mask_broken else trial_cfg['n_samples']) # Use all points instead of downsampling by n_samples
+            if mask_broken:   # only keep SDF samples from intact surface
+                center, max_radius = get_norm_params(sdf_dataset, sample_dict, pred_path)
+                points, sdf_vals = mask_broken_region(points, sdf_vals, pred_path, center, max_radius, trial_cfg['n_samples'])
             
             # Fast mode: one-shot encoder instead of full latent optimization 
             print("\n-----Fast mode: encoding latent (single forward pass)----\n")
@@ -323,8 +336,13 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
             # Normalize and scale output using model config training params
             center, max_radius = get_norm_params(sdf_dataset, sample_dict, pred_path)
             mesh_pv = normalize_mesh(mesh_out, pred_path, config, center, max_radius)
+
             if snap:
-                mesh_pv = snap_to_partial(mesh_pv, np.asarray(pv.read(pred_path).points, float)[::5])
+                fos = pv.read(pred_path)
+                fpts = np.asarray(fos.points, float)
+                if mask_broken and "broken" in fos.point_data:   # snap onto intact surface only
+                    fpts = fpts[np.asarray(fos.point_data["broken"]) == 0]
+                mesh_pv = snap_to_partial(mesh_pv, fpts[::5])
             
             # Save to file
             mesh_pv = mesh_pv.clean().triangulate()

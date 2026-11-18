@@ -15,7 +15,7 @@ import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
 from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
 from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, grid_search, grid_search_pointnet, region_errors
-from NSM.alignment import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, POSE_LOW_COMPLETE, snap_to_partial
+from NSM.fossils import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, POSE_LOW_COMPLETE, snap_to_partial, mask_broken_region
 # Monkey Patch into pymskt.mesh.meshes.Mesh
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
 meshes.Mesh.point_coords = property(fixed_point_coords)
@@ -25,47 +25,50 @@ random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
-# Define training directory
-TRAIN_DIR = "run_v72" # TO DO: Choose training directory containing model ckpt and latent codes
-CKPT = '2500' # TO DO: Choose the ckpt value you want to analyze results for
-LC_PATH =  TRAIN_DIR + '/latent_codes' + '/' + CKPT + '.pth'
-MODEL_PATH = TRAIN_DIR +  '/model' + '/' + CKPT + '.pth'
+# ============================================================================
+# Settings (TO DO)
+# ============================================================================
+TRAIN_DIR = "run_v72"          # training directory with model ckpt and latent codes
+CKPT = "2500"                  # checkpoint to analyze
+split = "train"                # "train", "val" or "test"
+fast_mode = True               # True = PointNet encoder (+ refinement), False = 2-phase latent optimization (slow)
+encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt"   # fast mode only
+N_TRIALS = 15                  # grid search trials
+N_TRIAL_INF = 30               # meshes per grid search trial
+N_FINAL_INF = 50               # meshes for final inference with the best cfg
+downsample_experiment = False  # True = score every model on the run_v72 partials
 
-# Downsample experiment: every model is scored on one common set of meshes,
-# using the partials generated once for run_v72
-downsample_experiment = False  # TO DO: Set to True if running for downsample experiment
+# Fossils
+fossils = True                 # True = score synthetic fossils against their intact meshes
+preprocessed = False           # True = preprocessed (smoothed, hole-filled) fossils; also masks broken SDF samples
+perturbed = False              # True = perturbed + realigned fossils
+stage = "aligned_mw_lms_per_foss_cover"   # perturbed only:
+                               #   "aligned"        = landmark alignment (align_model_to_ssm.py)
+                               #   "aligned_mw_lms" = MorphoWeave, surface + landmarks
+                               #   "aligned_mw_surf"= MorphoWeave, surface only
+                               #   + "_per_foss_cover" for per-fossil coverage
+POSE_CORRECTION = True         # refine latent + small pose correction of the input points
+LOW_COMPLETE = False           # True = fossils < 50% complete (wider limits, 7 starts, 2x iterations)
+LABEL_DIR = "fossilized"       # raw fossils with the 'broken' labels used for scoring
+GT_PATH_FIX = ("/home/k.wolcott/", "/home/kaubricot/Downloads/")   # KW local patch: (old, new) prefix of GT paths, None on devbox
+ONLY = None                    # quick test: one specimen name, None = all
+
+# ============================================================================
+# Derived (no need to edit)
+# ============================================================================
+LC_PATH = TRAIN_DIR + '/latent_codes/' + CKPT + '.pth'
+MODEL_PATH = TRAIN_DIR + '/model/' + CKPT + '.pth'
 PARTIAL_DIR = "run_v72" if downsample_experiment else TRAIN_DIR
-
-# Build remaining parameters
 val_sum_fn = PARTIAL_DIR + "/shape_completion/meshes/partial_meshing_summary.json"
-N_TRIALS = 15   # TO DO: Choose the number of trials for the grid search
-N_TRIAL_INF = 30   # TO DO: Choose the number of meshes to use for inference in each grid search trial
-N_FINAL_INF = 50   # TO DO: Choose how many meshes to use for final inference with best config reconstruction parameters from grid search
-split = "train"  # TO DO: Which dataset split to use - "train", "val", or "test"
+encoder_ckpt = os.path.abspath(encoder_path)
+OUTDIR = TRAIN_DIR + ("/shape_completion/fine_tuning_encoder" if fast_mode else "/shape_completion/fine_tuning")
 
-# Fast mode - custom trained PointNet encoder
-fast_mode = True  # TO DO: Use fast mode to encode via PointNet or using 2-phase latent optimization (slow)
-if fast_mode == True:
-    OUTDIR = TRAIN_DIR + "/shape_completion/fine_tuning_encoder" 
-    encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt" # TO DO: Point to encoder ckpt
-    encoder_ckpt = os.path.abspath(encoder_path)
-else: 
-    OUTDIR = TRAIN_DIR + "/shape_completion/fine_tuning"
-
-# Use fossil data?
-fossils = True  # TO DO: True = score synthetic fossils against their intact meshes
+SNAP = fossils                          # rigidly snap each completion onto the input fossil (fixes NSM placement offset)
+MASK_BROKEN = fossils and preprocessed  # leave out SDF samples whose nearest fossil surface is broken
+SELECT_BY = "mean_chamfer_filled" if fossils else "mean_cd"   # best cfg: filled-region error for fossils, whole bone otherwise
 if fossils:
-    LABEL_DIR = "fossilized"                       # raw fossils, carry the 'broken' labels
-    preprocessed = False                           # TO DO: True = score the hollow_cut meshes
-    perturbed = False                               # TO DO: True = score perturbed (+ realigned) fossils
-    stage = "aligned_mw_lms_per_foss_cover"
-                    # "aligned_mw_lms_per_foss_cover"    # TO DO: choose which alignment used
-                      #        "aligned" = perturbed and/or preprocessed, then realigned from landmarks (align_model_to_ssm.py)
-                      #        "aligned_mw_lms" = perturbed and/or preprocessed, then realigned with MorphoWeave, surface + landmarks
-                      #        "aligned_mw_surf" = perturbed and/or preprocessed, then realigned with MorphoWeave, surface only
-                      #        add "_per_foss_cover" to either MorphoWeave stage for per-fossil coverage (e.g. "aligned_mw_lms_per_foss_cover")
     if not perturbed:
-        stage = "orig"                             # unperturbed fossils have no realignment stage
+        stage = "orig"                  # unperturbed fossils have no realignment stage
     base = "fossilized_preprocessed" if preprocessed else LABEL_DIR
     perturb_dir = "perturbed_preprocessed" if preprocessed else "perturbed"
     FOSSIL_DIR = f"{perturb_dir}/{stage}/models" if perturbed else base
@@ -74,22 +77,15 @@ if fossils:
     MW_MODE = "lms" if "_lms" in stage else "surf"                 # mode column in the MorphoWeave pose log
     MW_LOG = (f"{perturb_dir}/pose_log_mw{'_per_foss_cover' if PER_FOSSIL_COV else ''}.csv"
               if perturbed and stage.startswith("aligned_mw") else None)
-    OUTDIR += "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
-
-    POSE_CORRECTION = True    # TO DO
-    LOW_COMPLETE = False      # TO DO: True = fossils < 50% complete (wider limits, 7 starts, 2x iterations)
     pose_cfg = POSE_LOW_COMPLETE if LOW_COMPLETE else POSE_STANDARD
+    OUTDIR += "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
     if POSE_CORRECTION:
         OUTDIR += "_pose_low" if LOW_COMPLETE else "_pose"
-
-SNAP = fossils   # TO DO: rigidly snap each completion onto the input fossil (fixes NSM placement offset)
 if SNAP:
     OUTDIR += "_snap"
-
-SELECT_BY = "mean_chamfer_filled" if fossils else "mean_cd"   # best cfg: filled-region error for fossil eval, whole bone otherwise
-
-# One outdir by data split
-OUTDIR = os.path.join(OUTDIR, split)
+if MASK_BROKEN:
+    OUTDIR += "_nobroken"
+OUTDIR = os.path.join(OUTDIR, split)    # one outdir by data split
 
 # Load model config
 config = load_config(config_path=TRAIN_DIR + '/model_params_config.json')
@@ -108,18 +104,14 @@ print(f"Found {len(config[split_key])} meshes in config['{split_key}'] (split='{
 # Find files if for fossils or modern specimens
 if fossils:
     # Pair "<name>_fossil*.vtk" with the intact "<name>" mesh in this split
-    #gt_paths = {os.path.splitext(os.path.basename(p))[0]: p for p in config[split_key]} # KW TO DO: patch for working locally not on devox
-    gt_paths = {os.path.splitext(os.path.basename(p))[0]: p.replace("/home/k.wolcott/", "/home/kaubricot/Downloads/")
+    gt_paths = {os.path.splitext(os.path.basename(p))[0]: p.replace(*GT_PATH_FIX) if GT_PATH_FIX else p
                 for p in config[split_key]}
     pairs = sorted((p, gt_paths[os.path.basename(p).split("_fossil")[0]])
                    for p in glob.glob(os.path.join(FOSSIL_DIR, "*.vtk"))
                    if os.path.basename(p).split("_fossil")[0] in gt_paths)
+    if ONLY:
+        pairs = [pr for pr in pairs if os.path.basename(pr[0]).startswith(ONLY + "_fossil")]
     print(f"{len(pairs)} fossil/intact pairs in '{split}'")
-
-    #ONLY = "agamidae_agama_atra_uf180711_07-t2"   # KW TO DO: quick patch, None = all fossils
-    #if ONLY:
-        #pairs = [pr for pr in pairs if os.path.basename(pr[0]).startswith(ONLY + "_fossil")]
-        #print(f"Filtered to {len(pairs)} pair(s) matching {ONLY}")
 
 else:
     with open(val_sum_fn, "r") as f:
@@ -139,7 +131,8 @@ if fast_mode:
                                                 log_path_csv=OUTDIR + "/trial_scores.csv",
                                                 label_dir=LABEL_DIR if fossils else None, 
                                                 ref_dir=base if fossils and perturbed else None, 
-                                                snap=SNAP, select_by=SELECT_BY)
+                                                snap=SNAP, select_by=SELECT_BY, 
+                                                mask_broken=MASK_BROKEN)
 else:   
     # Encode latent via 2 stage optimization (auto-decoder framework)
     best_cfg, trial_rows = grid_search(pairs, model, config, mean_latent, latent_codes, device, 
@@ -148,7 +141,8 @@ else:
                                         log_path_csv=OUTDIR + "/trial_scores.csv",
                                         label_dir=LABEL_DIR if fossils else None, 
                                         ref_dir=base if fossils and perturbed else None, 
-                                        snap=SNAP, select_by=SELECT_BY)
+                                        snap=SNAP, select_by=SELECT_BY,
+                                        mask_broken=MASK_BROKEN)
     
 best_cfg = load_best_cfg_from_csv(OUTDIR + "/trial_scores.csv", fast_mode, device, select_by=SELECT_BY)
 print(f"\n\nFinal inference cfg (from {OUTDIR}/trial_scores.csv, picked by {SELECT_BY}): {best_cfg}")
@@ -159,10 +153,11 @@ if n_final < N_FINAL_INF:
     print(f"\033[33mOnly {len(pairs)} pairs available; using all instead of {N_FINAL_INF}\033[0m")
     
 if fossils:
-    # Same specimens across fossil runs: sample from the fossilized/ list (same for every run), keep those this run has
-    master = sorted({os.path.basename(p).split("_fossil")[0] for p in glob.glob(os.path.join(LABEL_DIR, "*.vtk"))} & set(gt_paths))
-    keep = set(random.Random(0).sample(master, min(N_FINAL_INF, len(master))))
-    inf_subset = [pr for pr in pairs if os.path.basename(pr[0]).split("_fossil")[0] in keep]
+    # Same specimens across fossil runs: the split's specimens (gt_paths, same for every run) in one
+    # fixed random order (not alphabetical, which would pick one family), then the first N this run has
+    have = {os.path.basename(p).split("_fossil")[0]: (p, g) for p, g in pairs}
+    order = random.Random(0).sample(sorted(gt_paths), len(gt_paths))
+    inf_subset = [have[n] for n in order if n in have][:N_FINAL_INF]
 else:
     inf_subset = random.sample(pairs, n_final)
 
@@ -186,7 +181,12 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         # Latent encoding
         if fast_mode:
             # Build the SDF dataset using all surface samples
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=best_cfg['n_samples']) # Use all points instead of downsampling by n_samples
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=None if MASK_BROKEN else best_cfg['n_samples']) # Use all points instead of downsampling by n_samples
+
+            # Mask broken regions (only keep ground truth sdf's from intact surfaces)
+            if MASK_BROKEN:
+                center, max_radius = get_norm_params(sdf_dataset, sample_dict, vert_fname)
+                points, sdf_vals = mask_broken_region(points, sdf_vals, vert_fname, center, max_radius, best_cfg['n_samples'])
            
             # Fast mode: one-shot encoder instead of full latent optimization 
             print("\n-----Fast mode: encoding latent (single forward pass)----\n")
@@ -199,7 +199,10 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
 
         else:
             # Setup your dataset with just one mesh
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=240)
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=None if MASK_BROKEN else 240)
+            if MASK_BROKEN:
+                center, max_radius = get_norm_params(sdf_dataset, sample_dict, vert_fname)
+                points, sdf_vals = mask_broken_region(points, sdf_vals, vert_fname, center, max_radius, 240)
 
             # Encode latent via 2 stage optimization (auto-decoder framework)
             latent_opt = encode_latent(decoder=model, points=points.squeeze(), sdf_vals=sdf_vals, latent_dim=latent_codes.shape[1], 
@@ -223,8 +226,12 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         center, max_radius = get_norm_params(sdf_dataset, sample_dict, vert_fname)
         mesh_pv = normalize_mesh(mesh_out, vert_fname, config, center, max_radius)
         if SNAP:
-            mesh_pv = snap_to_partial(mesh_pv, np.asarray(pv.read(vert_fname).points, float)[::5])
-        
+            fos = pv.read(vert_fname)
+            fpts = np.asarray(fos.points, float)
+            if MASK_BROKEN and "broken" in fos.point_data:
+                fpts = fpts[np.asarray(fos.point_data["broken"]) == 0]
+            mesh_pv = snap_to_partial(mesh_pv, fpts[::5])
+
         # Save to file
         mesh_pv = mesh_pv.clean().triangulate()
         for arr in ['RegionId', 'vtkOriginalCellIds']:

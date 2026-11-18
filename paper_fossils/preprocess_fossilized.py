@@ -1,24 +1,21 @@
-
 #!/usr/bin/env python3
 """
-preprocess_fossilized.py: prepare fossil meshes for NSM shape completion, automating the
-3D Slicer Segment Editor steps, including cutting away broken surface.
+preprocess_fossilized.py: prepare fossil meshes for NSM shape completion: a smoothed,
+hole-filled, closed surface. Broken surface is kept (not cut away); its 'broken' label is
+read from the fossil's segmentation (see export_broken_seg.py) at the new vertices.
  
-    python paper_fossils/preprocess_fossilized.py fossil.vtk fossil_hollow_cut.vtk
-    python paper_fossils/preprocess_fossilized.py fossilized/ fossilized_preprocessed/ --workers 8   # a whole folder
-    python paper_fossils/preprocess_fossilized.py fossil.vtk out.vtk --intact modern.vtk            # fossil saved without labels
+    python paper_fossils/preprocess_fossilized.py fossil.vtk fossil_prep.vtk --broken fossil.seg.nrrd
+    python paper_fossils/preprocess_fossilized.py fossilized/ fossilized_preprocessed/ --broken fossilized_broken/ --workers 8
  
-Run from the repo root.
+Run from the repo root. In folder mode outputs keep the input file names (the folder
+marks the preprocessing), so downstream scripts match them to the raw fossils as is.
  
 Steps, in voxels (defaults match the manual workflow):
-    labelmap -> grow margin 3 -> smooth 6 -> fill holes 6 -> hollow (medial
-    surface, shell 3) -> cut away the shell over broken surface (thin cracks
-    are left) -> drop specks under 1000 voxels -> surface mesh
+    labelmap (interior filled) -> grow margin 3 -> smooth 6 -> fill holes 6 ->
+    shrink back 3 -> drop specks under 1000 voxels -> surface mesh -> 'broken' labels
  
-Which surface is broken comes from the 'broken' label fossilize.py saves with
-each output. For fossils made before that existed, pass --intact (the modern
-mesh it was made from): it is fitted onto the fossil (allowing shear and
-squashing) and surface far from it is treated as broken.
+Labels come from '<fossil name>.seg.nrrd' (a 'broken' segment, as painted in 3D Slicer or
+written by export_broken_seg.py). Without one the output has no 'broken' label.
  
 Requires: numpy scipy trimesh scikit-image (vtk for .vtk), and fossilize.py
 in the same folder.
@@ -35,9 +32,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import trimesh
 from scipy import ndimage
-from scipy.spatial import cKDTree
  
 from fossilize import MESH_EXTS, load_mesh, save_mesh
+from NSM.fossils import load_broken_seg
  
 # all sizes in voxels unless noted
 DEFAULTS = dict(
@@ -45,49 +42,9 @@ DEFAULTS = dict(
     margin=3,          # grow margin
     smooth=6,          # median smoothing kernel
     fill=6,            # fill holes (closing) kernel
-    shrink=4,          # shrink back after filling holes (3 = margin: undoes the growth)
-    shell=3,           # hollow: shell thickness around the medial surface
-    cut_margin=2,      # cut this much further into intact surface around breaks
-    min_width=8,       # broken patches narrower than this (cracks, seams) are not cut
-    min_island=1000,   # keep every piece of shell at least this big, not just the largest
-    tol=0.015,         # --intact only: surface farther than this (x bone size) is broken
+    shrink=3,          # shrink back after filling holes (= margin: undoes the growth, keeps bone size)
+    min_island=1000,   # keep every piece at least this big, not just the largest
 )
- 
- 
-# ----------------------------------------------------------------------------
-# Broken-surface labels
-# ----------------------------------------------------------------------------
-def labels_from_intact(fossil, intact, tol=0.015, max_angle=45, iters=40):
-    """Label fossil vertices broken where they are far from the intact mesh, or where
-    they face a different way than the intact surface there (fracture faces cut
-    across the original surface, even through thin parts where they stay close to
-    it). The intact mesh is first fitted onto the fossil with a trimmed affine ICP,
-    which absorbs shear and flattening."""
-    S = fossil.scale
-    fv, fn = np.array(fossil.vertices), np.array(fossil.vertex_normals)
-    src, fi = trimesh.sample.sample_surface_even(intact, 200000, seed=0)
-    src_n = intact.face_normals[fi]
-    A, t = np.eye(3), fossil.centroid - intact.centroid      # intact -> fossil
-    q = fv[np.random.default_rng(0).choice(len(fv), min(len(fv), 30000), replace=False)]
-    for it in range(iters):
-        d, j = cKDTree(src @ A.T + t).query(q)
-        keep = d <= np.quantile(d, 0.7 if it < iters // 2 else 0.85)   # ignore breaks
-        sol, *_ = np.linalg.lstsq(np.c_[src[j[keep]], np.ones(keep.sum())], q[keep], rcond=None)
-        A, t = sol[:3].T, sol[3]
-    d, j = cKDTree(src @ A.T + t).query(fv)
-    n_int = src_n[j] @ np.linalg.inv(A)                       # normals under the affine map
-    n_int /= np.linalg.norm(n_int, axis=1, keepdims=True)
-    facing = np.einsum("ij,ij->i", fn, n_int)
-    broken = (d > tol * S) | (facing < np.cos(np.radians(max_angle)))
-    # tidy: drop specks (texture can tilt a few normals), grow a little over the rims
-    L = trimesh.smoothing.laplacian_calculation(fossil, equal_weight=True)
-    b = broken.astype(float)
-    for _ in range(4):
-        b = L @ b
-    broken = b > 0.5
-    for _ in range(3):
-        broken = (L @ broken.astype(float)) > 0
-    return broken.astype(np.uint8)
  
  
 # ----------------------------------------------------------------------------
@@ -99,13 +56,11 @@ def _ball_close(occ, r):
     return ndimage.distance_transform_edt(dil) > r
  
  
-def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, cut_margin=2,
-            min_width=8, min_island=1000, shrink=0, **_):
-    """Run the preprocessing on one mesh. `broken` is a per-vertex 0/1 label.
-    Returns (hollow_cut mesh, info dict)."""
+def prepare(mesh, voxels=220, margin=3, smooth=6, fill=6, shrink=3, min_island=1000, **_):
+    """Run the preprocessing on one mesh. Returns (smoothed mesh, info dict)."""
     pitch = mesh.extents.max() / voxels
-    pad = margin + smooth + fill + shell + 4
-    vox = mesh.voxelized(pitch).fill()
+    pad = margin + smooth + fill + 4
+    vox = mesh.voxelized(pitch).fill()                        # solid labelmap (closes internal cavities)
     occ = np.pad(vox.matrix, pad)
     origin = vox.transform[:3, 3] - pad * pitch               # world position of voxel (0,0,0)
  
@@ -115,34 +70,10 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
     occ = _ball_close(occ, fill / 2)                          # fill holes
     if shrink:                                                # shrink back (undo the margin's growth)
         occ = ndimage.distance_transform_edt(occ) > shrink
-    d_in = ndimage.distance_transform_edt(occ)                # hollow around the surface
-    d_out = ndimage.distance_transform_edt(~occ)
-    inner = shell // 2 + shell % 2
-    hollow = (occ & (d_in <= inner)) | (~occ & (d_out <= shell - inner))
-    n_hollow = int(hollow.sum())
  
-    n_cut = 0
-    if broken is not None and np.any(broken):
-        broken = np.asarray(broken).astype(bool)
-        idx = np.argwhere(hollow)
-        pts = idx * pitch + origin
-        v = np.array(mesh.vertices)
-        db = cKDTree(v[broken]).query(pts)[0] / pitch
-        di = cKDTree(v[~broken]).query(pts)[0] / pitch if (~broken).any() else np.full(len(pts), np.inf)
-        cut = np.zeros_like(hollow)
-        cut[tuple(idx[db < di].T)] = True                     # nearest surface is broken
-        if min_width > 0:                                     # thin lines (cracks, seams) stay: only
-            r = min_width / 2                                 # cut where the broken patch is wide
-            to_intact = ndimage.distance_transform_edt(~(hollow & ~cut))
-            core = cut & (to_intact > r)
-            cut &= ndimage.distance_transform_edt(~core) <= r + 1
-        cut = hollow & (ndimage.distance_transform_edt(~cut) <= cut_margin)   # then reach past the rim
-        hollow &= ~cut
-        n_cut = int(cut.sum())
- 
-    lab, n = ndimage.label(hollow, structure=np.ones((3, 3, 3)))
+    lab, n = ndimage.label(occ, structure=np.ones((3, 3, 3)))
     if n == 0:
-        raise ValueError("nothing left after cutting")
+        raise ValueError("nothing left after smoothing")
     sizes = np.bincount(lab.ravel())[1:]
     keep = np.isin(lab, 1 + np.flatnonzero(sizes >= min(min_island, sizes.max())))  # drop specks only
  
@@ -151,9 +82,8 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
     verts, faces, _, _ = marching_cubes(field, 0.5)
     out = trimesh.Trimesh(verts * pitch + origin, faces, process=True)
     trimesh.repair.fix_normals(out)
-    info = dict(voxel_size=pitch, shell_voxels=n_hollow, cut_voxels=n_cut,
-                cut_pct=round(100 * n_cut / max(n_hollow, 1), 1), islands=n,
-                kept_pct=round(100 * sizes.max() / max(sizes.sum(), 1), 1))
+ 
+    info = dict(voxel_size=pitch, pieces=n, kept_pct=round(100 * sizes.max() / max(sizes.sum(), 1), 1))
     return out, info
  
  
@@ -161,59 +91,56 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
 # Files, folders, command line
 # ----------------------------------------------------------------------------
 def _one(job):
-    src, dst, intact, opts = job
+    src, dst, seg, opts = job
     if os.path.exists(dst):                                   # done already (this run or an earlier one)
         return f"skip  {os.path.basename(dst)}: exists"
     t0 = time.time()
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            mesh = load_mesh(src)
-            if intact:
-                broken = labels_from_intact(mesh, load_mesh(intact), opts["tol"])
-            else:
-                broken = mesh.vertex_attributes.get("broken")
-            out, info = prepare(mesh, broken, **opts)
+            out, info = prepare(load_mesh(src), **opts)
+            note = "no 'broken' segmentation"
+            if seg and os.path.exists(seg):                   # labels at the new vertices
+                out.vertex_attributes["broken"] = load_broken_seg(seg, out.vertices)
+                note = f"broken {100 * out.vertex_attributes['broken'].mean():.1f}%"
             save_mesh(out, dst)
-        note = "" if broken is not None else "  (no 'broken' label: nothing cut)"
-        return f"ok    {os.path.basename(dst)} ({time.time() - t0:.0f}s) cut {info['cut_pct']}% of shell, " \
-               f"voxel {info['voxel_size']:.4g}{note}"
+        return f"ok    {os.path.basename(dst)} ({time.time() - t0:.0f}s) {note}, {info['pieces']} piece(s), " \
+               f"voxel {info['voxel_size']:.4g}"
     except Exception as e:  # noqa: BLE001
         return f"ERROR {os.path.basename(src)}: {type(e).__name__}: {e}"
  
  
 def main():
-    p = argparse.ArgumentParser(description="Prepare fossil meshes for NSM: hollow shell with broken "
-                                            "surface cut away (automates the Slicer steps).")
+    p = argparse.ArgumentParser(description="Prepare fossil meshes for NSM: smoothed, hole-filled closed "
+                                            "surface, 'broken' labels carried over (automates the Slicer steps).")
     p.add_argument("input", help="fossil mesh, or folder of them")
     p.add_argument("output", help="output mesh, or output folder")
-    p.add_argument("--intact", help="intact mesh (or folder of them, matched by name) for fossils "
-                                    "saved without a 'broken' label")
+    p.add_argument("--broken", help="'broken' segmentation (.seg.nrrd), or folder of them named "
+                                    "<fossil name>.seg.nrrd")
     for k, v in DEFAULTS.items():
         p.add_argument(f"--{k.replace('_', '-')}", type=type(v), default=v, help=f"default {v}")
     p.add_argument("--workers", type=int, default=1, help="files in parallel")
-    p.add_argument("--suffix", default="_hollow_cut", help="added to output names in folder mode")
+    p.add_argument("--suffix", default="", help="added to output names in folder mode (default: none, same names)")
     a = p.parse_args()
     opts = {k: getattr(a, k) for k in DEFAULTS}
  
     if not os.path.isdir(a.input):
-        print(_one((a.input, a.output, a.intact, opts)))
+        print(_one((a.input, a.output, a.broken, opts)))
         return
     os.makedirs(a.output, exist_ok=True)
-    jobs = []
+    jobs, missing = [], []
     for f in sorted(os.listdir(a.input)):
         stem, ext = os.path.splitext(f)
         if ext.lower() not in MESH_EXTS:
             continue
-        intact = a.intact
-        if intact and os.path.isdir(intact):            # match fossil "name_fossil..." to intact "name.*"
-            base = stem.split("_fossil")[0]
-            hits = [g for g in os.listdir(intact) if os.path.splitext(g)[0] == base]
-            if not hits:
-                print(f"skip  {f}: no intact mesh named {base}.* in {intact}")
-                continue
-            intact = os.path.join(intact, hits[0])
-        jobs.append((os.path.join(a.input, f), os.path.join(a.output, stem + a.suffix + ext), intact, opts))
+        seg = os.path.join(a.broken, stem + ".seg.nrrd") if a.broken else None
+        if not seg or not os.path.exists(seg):
+            print(f"\033[33mwarn  {f}: no {seg or 'segmentation (--broken)'}, output has no 'broken' label\033[0m")
+            missing.append(f"{f},{seg or ''}")
+        jobs.append((os.path.join(a.input, f), os.path.join(a.output, stem + a.suffix + ext), seg, opts))
+    if missing:
+        with open(os.path.join(a.output, "missing_segs.csv"), "w") as fh:
+            fh.write("fossil,seg\n" + "\n".join(missing) + "\n")
     print(f"{len(jobs)} file(s), {a.workers} worker(s)")
     if a.workers > 1:
         with ProcessPoolExecutor(a.workers) as ex:

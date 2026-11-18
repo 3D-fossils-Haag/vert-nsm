@@ -15,47 +15,75 @@ import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
 from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
 from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, region_errors
-from NSM.alignment import undo_pose_error, optimize_latent_pose, undo_pose, snap_to_partial, POSE_STANDARD, POSE_LOW_COMPLETE
+from NSM.fossils import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, POSE_LOW_COMPLETE, snap_to_partial, mask_broken_region
+
 # Monkey Patch into pymskt.mesh.meshes.Mesh
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
 meshes.Mesh.point_coords = property(fixed_point_coords)
 import time
 
-# Define training directory
-TRAIN_DIR = "run_v72" # TO DO: Choose training directory containing model ckpt and latent codes
-CKPT = '2500' # TO DO: Choose the ckpt value you want to analyze results for
-LC_PATH =  TRAIN_DIR + '/latent_codes' + '/' + CKPT + '.pth'
-MODEL_PATH = TRAIN_DIR +  '/model' + '/' + CKPT + '.pth'
+# ============================================================================
+# Settings (TO DO)
+# ============================================================================
+TRAIN_DIR = "run_v72"          # training directory with model ckpt and latent codes
+CKPT = "2500"                  # checkpoint to analyze
+split = "test"                 # split to evaluate: "train", "val" or "test"
+N_INF = "all"                  # meshes to run, or "all"
+fast_mode = True               # True = PointNet encoder (+ refinement), False = 2-phase latent optimization (slow)
+encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt"   # fast mode only
+LOAD_BEST_CFG_FROM_CSV = True  # False = manual cfg below
+downsample_experiment = False  # True = score every model on one common set of meshes (run_v72 partials)
 
-# Downsample experiment: every model is scored on one common set of meshes,
-# using the partials generated once for run_v72
-downsample_experiment = False  # TO DO: Set to True if running for downsample experiment
+# Fossils: set these exactly as in the grid search run the best cfg comes from
+fossils = True                 # True = score synthetic fossils against their intact meshes
+preprocessed = False           # True = preprocessed (smoothed, hole-filled) fossils; also masks broken SDF samples
+perturbed = True               # True = perturbed + realigned fossils
+stage = "aligned_mw_surf_per_foss_cover"   # perturbed only:
+                               #   "aligned"        = landmark alignment (align_model_to_ssm.py)
+                               #   "aligned_mw_lms" = MorphoWeave, surface + landmarks
+                               #   "aligned_mw_surf"= MorphoWeave, surface only
+                               #   + "_per_foss_cover" for per-fossil coverage
+POSE_CORRECTION = True         # refine latent + small pose correction of the input points
+LOW_COMPLETE = False           # True = fossils < 50% complete (wider limits, 7 starts, 2x iterations)
+GRID_SPLIT = "train"           # split the grid search ran on
+LABEL_DIR = "fossilized"       # raw fossils with the 'broken' labels used for scoring
+GT_PATH_FIX = ("/home/k.wolcott/", "/home/kaubricot/Downloads/")   # KW local patch: (old, new) prefix of GT paths, None on devbox
+
+# ============================================================================
+# Derived (no need to edit)
+# ============================================================================
+LC_PATH = TRAIN_DIR + '/latent_codes/' + CKPT + '.pth'
+MODEL_PATH = TRAIN_DIR + '/model/' + CKPT + '.pth'
 MESH_LIST = "common_eval_meshes.json" if downsample_experiment else None
 PARTIAL_DIR = "run_v72" if downsample_experiment else TRAIN_DIR
-tag = "_common" if downsample_experiment else ""
-
-# Build other paths
 val_sum_fn = PARTIAL_DIR + "/shape_completion/meshes/partial_meshing_summary.json"
-LOAD_BEST_CFG_FROM_CSV = True
-split = "test"  # TO DO: Which dataset split to use - "train", "val", or "test"
-N_INF = "all"  # TO DO: Choose how many meshes to use for inference (or use "all" to run for all)
-fast_mode = True  # TO DO: Use fast mode to encode via PointNet or using 2-phase latent optimization (slow)
-FOSSIL_DIR = "perturbed/aligned_mw_surf_per_foss_cover/models"   # TO DO: None = modern partials (original behaviour)
-LABEL_DIR = "fossilized"   # TO DO: unperturbed raw fossils (carry 'broken' labels; reference for removing alignment error)
-GRID_RUN = "fine_tuning_encoder_perturbed_aligned_mw_surf_per_foss_cover_models_pose/train"   # TO DO: grid search run to take best_cfg from
-BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/" + (GRID_RUN if FOSSIL_DIR else "fine_tuning") + "/trial_scores.csv"
-if fast_mode:
-    encoder_path = TRAIN_DIR + "/encoder/checkpoints/encoder.pt"  # TO DO: Point to encoder ckpt
-    if not FOSSIL_DIR:
-        BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning_encoder/trial_scores.csv"
-    encoder_ckpt = os.path.abspath(encoder_path)
-if FOSSIL_DIR:
-    tag = "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
+encoder_ckpt = os.path.abspath(encoder_path)
 
-SELECT_BY = "mean_chamfer_filled" if FOSSIL_DIR else "mean_cd"   # best cfg: filled-region error for fossil eval, whole bone otherwise
-POSE_CORRECTION = "_pose" in GRID_RUN    # match the grid search run the cfg came from
-SNAP = "_snap" in GRID_RUN
-pose_cfg = POSE_LOW_COMPLETE if "_pose_low" in GRID_RUN else POSE_STANDARD
+# Grid search run name, built the same way as in shape_completion_grid_search.py
+SNAP = fossils                          # rigidly snap each completion onto the input fossil
+MASK_BROKEN = fossils and preprocessed  # leave out SDF samples whose nearest fossil surface is broken
+SELECT_BY = "mean_chamfer_filled" if fossils else "mean_cd"
+GRID_RUN = "fine_tuning_encoder" if fast_mode else "fine_tuning"
+if fossils:
+    if not perturbed:
+        stage = "orig"
+    base = "fossilized_preprocessed" if preprocessed else LABEL_DIR   # unperturbed copies
+    perturb_dir = "perturbed_preprocessed" if preprocessed else "perturbed"
+    FOSSIL_DIR = f"{perturb_dir}/{stage}/models" if perturbed else base
+    pose_cfg = POSE_LOW_COMPLETE if LOW_COMPLETE else POSE_STANDARD
+    GRID_RUN += "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
+    if POSE_CORRECTION:
+        GRID_RUN += "_pose_low" if LOW_COMPLETE else "_pose"
+if SNAP:
+    GRID_RUN += "_snap"
+if MASK_BROKEN:
+    GRID_RUN += "_nobroken"
+if fossils:
+    BEST_CFG_CSV = f"{TRAIN_DIR}/shape_completion/{GRID_RUN}/{GRID_SPLIT}/trial_scores.csv"
+    tag = GRID_RUN.split("fine_tuning_encoder" if fast_mode else "fine_tuning", 1)[1]   # run settings, in the output name
+else:
+    BEST_CFG_CSV = f"{TRAIN_DIR}/shape_completion/{GRID_RUN}/trial_scores.csv"
+    tag = "_common" if downsample_experiment else ""
 
 # Load model config
 config = load_config(config_path=TRAIN_DIR + '/model_params_config.json')
@@ -121,9 +149,9 @@ mesh_names = {strip_partial_mesh_name(p) for p in mesh_paths}
 
 # Load partial meshing summary
 # Find corresponding partial meshes to use for shape completion against ground truth meshes
-if FOSSIL_DIR:
+if fossils:
     # Pair "<name>_fossil*.vtk" with the intact "<name>" mesh in this split
-    gt_paths = {os.path.splitext(os.path.basename(p))[0]: p.replace("/home/k.wolcott/", "/home/kaubricot/Downloads/")
+    gt_paths = {os.path.splitext(os.path.basename(p))[0]: p.replace(*GT_PATH_FIX) if GT_PATH_FIX else p
                 for p in mesh_paths}
     pairs = sorted((p, gt_paths[os.path.basename(p).split("_fossil")[0]])
                    for p in glob.glob(os.path.join(FOSSIL_DIR, "*.vtk"))
@@ -160,7 +188,10 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         # Latent encoding
         if fast_mode:
             # Build the SDF dataset using all surface samples
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=best_cfg.get('n_samples'))   # None = all points
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=None if MASK_BROKEN else best_cfg.get('n_samples'))   # None = all points
+            if MASK_BROKEN:   # only keep SDF samples from intact surface
+                center, max_radius = get_norm_params(sdf_dataset, sample_dict, vert_fname)
+                points, sdf_vals = mask_broken_region(points, sdf_vals, vert_fname, center, max_radius, best_cfg.get('n_samples'))
            
             # Fast mode: one-shot encoder instead of full latent optimization 
             print("\n-----Fast mode: encoding latent (single forward pass)----\n")
@@ -174,7 +205,10 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
 
         else:
             # Setup your dataset with just one mesh
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=best_cfg.get('n_samples') or 240)
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=None if MASK_BROKEN else best_cfg.get('n_samples') or 240)
+            if MASK_BROKEN:   # only keep SDF samples from intact surface
+                center, max_radius = get_norm_params(sdf_dataset, sample_dict, vert_fname)
+                points, sdf_vals = mask_broken_region(points, sdf_vals, vert_fname, center, max_radius, best_cfg.get('n_samples') or 240)
 
             # Encode latent via 2 stage optimization (auto-decoder framework)
             latent_opt = encode_latent(decoder=model, points=points.squeeze(), sdf_vals=sdf_vals, latent_dim=latent_codes.shape[1], 
@@ -186,7 +220,7 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
 
         # Pose correction (as in the grid search run), then reconstruction mesh from latent
         pose = None
-        if FOSSIL_DIR and POSE_CORRECTION:
+        if fossils and POSE_CORRECTION:
             latent_opt, pose = optimize_latent_pose(model, points.squeeze(), sdf_vals, latent_opt, pose_cfg, device=device)
         mesh_out = reconstruct_mesh_from_latent(vert_fname, model, latent_opt, best_cfg)
         if pose is not None:
@@ -196,7 +230,11 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         center, max_radius = get_norm_params(sdf_dataset, sample_dict, vert_fname)
         mesh_pv = normalize_mesh(mesh_out, vert_fname, config, center, max_radius)
         if SNAP:
-            mesh_pv = snap_to_partial(mesh_pv, np.asarray(pv.read(vert_fname).points, float)[::5])
+            fos = pv.read(vert_fname)
+            fpts = np.asarray(fos.points, float)
+            if MASK_BROKEN and "broken" in fos.point_data:   # snap onto intact surface only
+                fpts = fpts[np.asarray(fos.point_data["broken"]) == 0]
+            mesh_pv = snap_to_partial(mesh_pv, fpts[::5])
         
         # Calculate chamfer distance between shape completed and original-ground truth mesh
         pred = mesh_pv.clean().triangulate().extract_surface(algorithm=None)
@@ -204,11 +242,10 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         cd = chamfer_distance(pred, gt, n_samples=20000)
         print(f"\n{os.path.basename(pm_path)} Chamfer={cd:.4f}\n") 
         regions = {}
-        if FOSSIL_DIR:
+        if fossils:
             label_path = os.path.join(LABEL_DIR, os.path.basename(pm_path).replace("_hollow_cut", "").replace("_align", ""))
             regions = region_errors(pred, gt, label_path)                            # intact / filled
-            ref_path = os.path.join(LABEL_DIR + ("_preprocessed" if "preprocessed" in FOSSIL_DIR else ""),
-                                    os.path.basename(pm_path).replace("_align", ""))   # unperturbed copy, same vertices as the input
+            ref_path = os.path.join(base, os.path.basename(pm_path).replace("_align", ""))   # unperturbed copy, same vertices as the input
             pred_shape = undo_pose_error(pred, pm_path, ref_path)                    # alignment error removed
             regions["chamfer_shape"] = chamfer_distance(pred_shape, gt, n_samples=20000)
             regions.update({k + "_shape": v for k, v in region_errors(pred_shape, gt, label_path).items()})
