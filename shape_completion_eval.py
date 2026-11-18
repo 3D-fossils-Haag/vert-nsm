@@ -15,7 +15,7 @@ import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
 from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
 from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, region_errors
-from NSM.alignment import undo_pose_error
+from NSM.alignment import undo_pose_error, optimize_latent_pose, undo_pose, snap_to_partial, POSE_STANDARD, POSE_LOW_COMPLETE
 # Monkey Patch into pymskt.mesh.meshes.Mesh
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
 meshes.Mesh.point_coords = property(fixed_point_coords)
@@ -36,7 +36,6 @@ tag = "_common" if downsample_experiment else ""
 
 # Build other paths
 val_sum_fn = PARTIAL_DIR + "/shape_completion/meshes/partial_meshing_summary.json"
-BEST_CFG_CSV = TRAIN_DIR + "/shape_completion/fine_tuning/trial_scores.csv"  # TO DO: set to your CSV path
 LOAD_BEST_CFG_FROM_CSV = True
 split = "test"  # TO DO: Which dataset split to use - "train", "val", or "test"
 N_INF = "all"  # TO DO: Choose how many meshes to use for inference (or use "all" to run for all)
@@ -53,6 +52,11 @@ if fast_mode:
 if FOSSIL_DIR:
     tag = "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
 
+SELECT_BY = "mean_chamfer_filled" if FOSSIL_DIR else "mean_cd"   # best cfg: filled-region error for fossil eval, whole bone otherwise
+POSE_CORRECTION = "_pose" in GRID_RUN    # match the grid search run the cfg came from
+SNAP = "_snap" in GRID_RUN
+pose_cfg = POSE_LOW_COMPLETE if "_pose_low" in GRID_RUN else POSE_STANDARD
+
 # Load model config
 config = load_config(config_path=TRAIN_DIR + '/model_params_config.json')
 device = config.get("device", "cuda:0")
@@ -63,12 +67,12 @@ mean_latent = latent_codes.mean(dim=0, keepdim=True)
 
 # Load best optimization config from shape_completion_grid_search.py (or manually enter)
 if LOAD_BEST_CFG_FROM_CSV:
-    best_cfg = load_best_cfg_from_csv(BEST_CFG_CSV, fast_mode, device)
+    best_cfg = load_best_cfg_from_csv(BEST_CFG_CSV, fast_mode, device, select_by=SELECT_BY)
     cfg_source = f"CSV ({BEST_CFG_CSV})"
 
 else:        # TO DO: Manually enter chosen vals
     if fast_mode:
-        best_cfg = {"refine_iters": 200, # TO DO: Refine pointnet encoding with additional iterations (Ex: 300-500)
+        best_cfg = {"iters": 200, # TO DO: Refine pointnet encoding with additional iterations (Ex: 300-500)
                     "top_k": 466,
                     "lr": 1e-3,
                     "lambda_reg": 1e-6,
@@ -77,7 +81,8 @@ else:        # TO DO: Manually enter chosen vals
                     "sched_step": 300,
                     "sched_gamma": 0.9,
                     "batch_infer": 32768,
-                    "gridN": 256}
+                    "gridN": 256,
+                    "n_samples": None}
     else:
         best_cfg = {"top_k": 466,
                     "iters1": 5000,
@@ -155,7 +160,7 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         # Latent encoding
         if fast_mode:
             # Build the SDF dataset using all surface samples
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=None) # Use all points instead of downsampling by n_samples
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=best_cfg.get('n_samples'))   # None = all points
            
             # Fast mode: one-shot encoder instead of full latent optimization 
             print("\n-----Fast mode: encoding latent (single forward pass)----\n")
@@ -163,13 +168,13 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
             if best_cfg['iters'] > 0:
                 print(f"Refining encoder latent for {best_cfg['iters']} iters (lr={best_cfg['lr']}, lambda={best_cfg['lambda_reg']})...")
                 latent_opt, _ = optimize_latent_partial(model, points.squeeze(), sdf_vals, config['latent_size'], latent_init=latent_opt, top_k=best_cfg['top_k'],
-                                                        iters=best_cfg['iters'], lr=best_cfg['lr'], lambda_reg=best_cfg['lambda_reg'], clamp_val=None,
-                                                        latent_std=best_cfg['latent_std'], scheduler_step=800, 
-                                                        scheduler_gamma=0.7, batch_inference_size=32768, multi_stage=True, device=device)        
+                                                        iters=best_cfg['iters'], lr=best_cfg['lr'], lambda_reg=best_cfg['lambda_reg'], clamp_val=best_cfg['clamp'],
+                                                        latent_std=best_cfg['latent_std'], scheduler_step=best_cfg['sched_step'],
+                                                        scheduler_gamma=best_cfg['sched_gamma'], batch_inference_size=best_cfg['batch_infer'], multi_stage=True, device=device)
 
         else:
             # Setup your dataset with just one mesh
-            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=240)
+            points, sdf_vals, sdf_dataset, sample_dict = build_sdf_dataset(vert_fname, config, n_samples=best_cfg.get('n_samples') or 240)
 
             # Encode latent via 2 stage optimization (auto-decoder framework)
             latent_opt = encode_latent(decoder=model, points=points.squeeze(), sdf_vals=sdf_vals, latent_dim=latent_codes.shape[1], 
@@ -179,12 +184,19 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
                                     scheduler_step1=best_cfg['sched_step'], scheduler_step2=best_cfg['sched_step'], scheduler_gamma1=best_cfg['sched_gamma1'],
                                     scheduler_gamma2=best_cfg['sched_gamma2'], batch_inference_size=best_cfg['batch_infer']) 
 
-        # Reconstruction mesh from latent
-        mesh_out = reconstruct_mesh_from_latent(vert_fname, model, latent_opt, config)
+        # Pose correction (as in the grid search run), then reconstruction mesh from latent
+        pose = None
+        if FOSSIL_DIR and POSE_CORRECTION:
+            latent_opt, pose = optimize_latent_pose(model, points.squeeze(), sdf_vals, latent_opt, pose_cfg, device=device)
+        mesh_out = reconstruct_mesh_from_latent(vert_fname, model, latent_opt, best_cfg)
+        if pose is not None:
+            mesh_out = undo_pose(mesh_out, pose)   # back onto the fossil, before normalize_mesh
 
         # Normalize and scale output using model config training params
         center, max_radius = get_norm_params(sdf_dataset, sample_dict, vert_fname)
         mesh_pv = normalize_mesh(mesh_out, vert_fname, config, center, max_radius)
+        if SNAP:
+            mesh_pv = snap_to_partial(mesh_pv, np.asarray(pv.read(vert_fname).points, float)[::5])
         
         # Calculate chamfer distance between shape completed and original-ground truth mesh
         pred = mesh_pv.clean().triangulate().extract_surface(algorithm=None)
@@ -195,7 +207,9 @@ for i, (pm_path, gt_path) in enumerate(inf_subset, start=1):
         if FOSSIL_DIR:
             label_path = os.path.join(LABEL_DIR, os.path.basename(pm_path).replace("_hollow_cut", "").replace("_align", ""))
             regions = region_errors(pred, gt, label_path)                            # intact / filled
-            pred_shape = undo_pose_error(pred, pm_path, label_path)                  # alignment error removed
+            ref_path = os.path.join(LABEL_DIR + ("_preprocessed" if "preprocessed" in FOSSIL_DIR else ""),
+                                    os.path.basename(pm_path).replace("_align", ""))   # unperturbed copy, same vertices as the input
+            pred_shape = undo_pose_error(pred, pm_path, ref_path)                    # alignment error removed
             regions["chamfer_shape"] = chamfer_distance(pred_shape, gt, n_samples=20000)
             regions.update({k + "_shape": v for k, v in region_errors(pred_shape, gt, label_path).items()})
             print({k: round(float(v), 4) for k, v in regions.items()})

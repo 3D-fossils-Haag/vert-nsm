@@ -87,7 +87,9 @@ def gt_intact_mask(gt_pts, fossil_path, tol=0.01, iters=30):
     return (d < tol * size) & ~broken[j]
 
 def region_errors(compl, gt, fossil_path, n_samples=20000, offset=0.01, seed=0):
-    gt = gt.extract_surface(algorithm=None).triangulate().compute_normals(point_normals=True, auto_orient_normals=True)
+    gt = gt.extract_surface(algorithm=None).triangulate()
+    gt.point_data.pop("Normals", None)                   # stored normals would be reused, not recomputed
+    gt = gt.compute_normals(point_normals=True, auto_orient_normals=True)
     compl = compl.extract_surface(algorithm=None).triangulate()
     sg = np.asarray(uniform_surface_sample(gt, n_samples))
     sp = np.asarray(uniform_surface_sample(compl, n_samples))
@@ -108,9 +110,10 @@ def region_errors(compl, gt, fossil_path, n_samples=20000, offset=0.01, seed=0):
     return out
 
 # Load in best_cfg from shape_completion_grid_search.py (or manually enter)
-def load_best_cfg_from_csv(csv_path, fast_mode, device):
+def load_best_cfg_from_csv(csv_path, fast_mode, device, select_by="mean_cd"):
     df = pd.read_csv(csv_path)
-    best_row = df.loc[df["mean_cd"].idxmin()]
+    col = select_by if select_by in df and df[select_by].notna().any() else "mean_cd"
+    best_row = df.loc[df[col].idxmin()]
     # Parse latent_std whether stored as "tensor(0.4401)" or plain float
     raw_std = best_row["latent_std"]
     if isinstance(raw_std, str):
@@ -150,11 +153,11 @@ def load_best_cfg_from_csv(csv_path, fast_mode, device):
                     "batch_infer": int(best_row["batch_infer"]),
                     "gridN":       256}
 
-    print(f"\nLoaded best_cfg from CSV (min mean_cd = {best_row['mean_cd']:.4f}):")
+    print(f"\nLoaded best_cfg from CSV (min {col} = {best_row[col]:.4f}, mean_cd = {best_row['mean_cd']:.4f}):")
     return best_cfg
 
 # Random search on a small validation subset to pick best cfg
-def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False):
+def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False, select_by="mean_cd"):
     # Set up directory for fine-tuning experiemnts
     os.makedirs(out_dir, exist_ok=True)
     val_subset = random.sample(pairs, min(valN, len(pairs)))
@@ -243,23 +246,26 @@ def grid_search(pairs, model, config, mean_latent, latent_codes, device, out_dir
 
         # Get mean chamfer for all meshes from trial
         mean_cd = float(np.mean(scores))
-        if mean_cd < best['score']:
-            best = {'score': mean_cd, 'cfg': trial_cfg}
+
         # Append the current trial's results to the list
         mean_time = float(np.mean(times))
         mean_cd_shape = float(np.mean(shape_scores)) if shape_scores else np.nan
         region_means = pd.DataFrame(region_rows).mean().add_prefix("mean_").to_dict() if region_rows else {}
         rows.append({'trial': t, 'mean_cd': mean_cd, 'mean_cd_shape': mean_cd_shape, 'mean_time': mean_time, **region_means, **trial_cfg, 'n_samples': 240, 'cd_n_samples': 5000})
+        score = rows[-1].get(select_by, np.nan)
+        score = mean_cd if pd.isna(score) else score         # falls back to whole-bone Chamfer if no labels
+        if score < best['score']:
+            best = {'score': score, 'cfg': trial_cfg}
         if log_path_csv is not None:
             pd.DataFrame(rows).to_csv(log_path_csv, index=False)
-    print(f"Best cfg: {best['cfg']} (mean Chamfer={best['score']:.4f})")
+    print(f"Best cfg: {best['cfg']} ({select_by}={best['score']:.4f})")
     # Save logs
     if log_path_csv:
         print(f"Finished. Final trial log with all trials saved to {log_path_csv}")
     return best['cfg'], rows
 
 # Random search on a small validation subset to pick best cfg
-def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device, encoder_ckpt, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False):
+def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device, encoder_ckpt, out_dir, n_trials=15, valN=30, log_path_csv=None, log_path_json=None, label_dir=None, ref_dir=None, snap=False, select_by="mean_cd"):
     # Set up directory for fine-tuning experiemnts
     os.makedirs(out_dir, exist_ok=True)
     val_subset = random.sample(pairs, min(valN, len(pairs)))
@@ -350,16 +356,18 @@ def grid_search_pointnet(pairs, model, config, mean_latent, latent_codes, device
 
         # Get mean chamfer for all meshes from trial
         mean_cd = float(np.mean(scores))
-        if mean_cd < best['score']:
-            best = {'score': mean_cd, 'cfg': trial_cfg}
         # Append the current trial's results to the list
         mean_time = float(np.mean(times))
         mean_cd_shape = float(np.mean(shape_scores)) if shape_scores else np.nan
         region_means = pd.DataFrame(region_rows).mean().add_prefix("mean_").to_dict() if region_rows else {}
         rows.append({'trial': t, 'mean_cd': mean_cd, 'mean_cd_shape': mean_cd_shape, 'mean_time': mean_time, **region_means, **trial_cfg, 'multi_stage': True, 'encoder_ckpt': encoder_ckpt, 'cd_n_samples': 5000})
+        score = rows[-1].get(select_by, np.nan)
+        score = mean_cd if pd.isna(score) else score         # falls back to whole-bone Chamfer if no labels
+        if score < best['score']:
+            best = {'score': score, 'cfg': trial_cfg}
         if log_path_csv is not None:
             pd.DataFrame(rows).to_csv(log_path_csv, index=False)
-    print(f"Best cfg: {best['cfg']} (mean Chamfer={best['score']:.4f})")
+    print(f"Best cfg: {best['cfg']} ({select_by}={best['score']:.4f})")
     # Save logs
     if log_path_csv:
         print(f"Finished. Final trial log with all trials saved to {log_path_csv}")

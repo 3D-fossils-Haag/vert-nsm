@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 """
 perturb_align_scale_fossils.py: test landmark alignment of fossils before NSM.
 

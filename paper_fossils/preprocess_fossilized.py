@@ -45,6 +45,7 @@ DEFAULTS = dict(
     margin=3,          # grow margin
     smooth=6,          # median smoothing kernel
     fill=6,            # fill holes (closing) kernel
+    shrink=4,          # shrink back after filling holes (3 = margin: undoes the growth)
     shell=3,           # hollow: shell thickness around the medial surface
     cut_margin=2,      # cut this much further into intact surface around breaks
     min_width=8,       # broken patches narrower than this (cracks, seams) are not cut
@@ -99,7 +100,7 @@ def _ball_close(occ, r):
  
  
 def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, cut_margin=2,
-            min_width=8, min_island=1000, **_):
+            min_width=8, min_island=1000, shrink=0, **_):
     """Run the preprocessing on one mesh. `broken` is a per-vertex 0/1 label.
     Returns (hollow_cut mesh, info dict)."""
     pitch = mesh.extents.max() / voxels
@@ -112,6 +113,8 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
     k = smooth + (smooth % 2 == 0)                            # median of a binary = majority
     occ = ndimage.uniform_filter(occ.astype(np.float32), size=k) > 0.5
     occ = _ball_close(occ, fill / 2)                          # fill holes
+    if shrink:                                                # shrink back (undo the margin's growth)
+        occ = ndimage.distance_transform_edt(occ) > shrink
     d_in = ndimage.distance_transform_edt(occ)                # hollow around the surface
     d_out = ndimage.distance_transform_edt(~occ)
     inner = shell // 2 + shell % 2
@@ -159,6 +162,8 @@ def prepare(mesh, broken=None, voxels=220, margin=3, smooth=6, fill=6, shell=3, 
 # ----------------------------------------------------------------------------
 def _one(job):
     src, dst, intact, opts = job
+    if os.path.exists(dst):                                   # done already (this run or an earlier one)
+        return f"skip  {os.path.basename(dst)}: exists"
     t0 = time.time()
     try:
         with warnings.catch_warnings():

@@ -56,14 +56,16 @@ else:
 fossils = True  # TO DO: True = score synthetic fossils against their intact meshes
 if fossils:
     LABEL_DIR = "fossilized"                       # raw fossils, carry the 'broken' labels
-    preprocessed = True                           # TO DO: True = score the hollow_cut meshes
-    perturbed = True                               # TO DO: True = score perturbed (+ realigned) fossils
-    stage = "aligned_mw_lms_per_foss_cover"    # TO DO: "orig" = perturbed only (not realigned)
+    preprocessed = False                           # TO DO: True = score the hollow_cut meshes
+    perturbed = False                               # TO DO: True = score perturbed (+ realigned) fossils
+    stage = "aligned_mw_lms_per_foss_cover"
+                    # "aligned_mw_lms_per_foss_cover"    # TO DO: choose which alignment used
                       #        "aligned" = perturbed and/or preprocessed, then realigned from landmarks (align_model_to_ssm.py)
                       #        "aligned_mw_lms" = perturbed and/or preprocessed, then realigned with MorphoWeave, surface + landmarks
                       #        "aligned_mw_surf" = perturbed and/or preprocessed, then realigned with MorphoWeave, surface only
-                      #        add "_per_foss_cover" to either MorphoWeave stage for per-fossil coverage (e.g. "aligned_mw_lms_cov")
                       #        add "_per_foss_cover" to either MorphoWeave stage for per-fossil coverage (e.g. "aligned_mw_lms_per_foss_cover")
+    if not perturbed:
+        stage = "orig"                             # unperturbed fossils have no realignment stage
     base = "fossilized_preprocessed" if preprocessed else LABEL_DIR
     perturb_dir = "perturbed_preprocessed" if preprocessed else "perturbed"
     FOSSIL_DIR = f"{perturb_dir}/{stage}/models" if perturbed else base
@@ -80,9 +82,11 @@ if fossils:
     if POSE_CORRECTION:
         OUTDIR += "_pose_low" if LOW_COMPLETE else "_pose"
 
-    SNAP = True   # TO DO: rigidly snap each completion onto the input fossil (fixes NSM placement offset)
-    if SNAP:
-        OUTDIR += "_snap"
+SNAP = fossils   # TO DO: rigidly snap each completion onto the input fossil (fixes NSM placement offset)
+if SNAP:
+    OUTDIR += "_snap"
+
+SELECT_BY = "mean_chamfer_filled" if fossils else "mean_cd"   # best cfg: filled-region error for fossil eval, whole bone otherwise
 
 # One outdir by data split
 OUTDIR = os.path.join(OUTDIR, split)
@@ -112,10 +116,10 @@ if fossils:
                    if os.path.basename(p).split("_fossil")[0] in gt_paths)
     print(f"{len(pairs)} fossil/intact pairs in '{split}'")
 
-    ONLY = "agamidae_agama_atra_uf180711_07-t2"   # KW TO DO: quick patch, None = all fossils
-    if ONLY:
-        pairs = [pr for pr in pairs if os.path.basename(pr[0]).startswith(ONLY + "_fossil")]
-        print(f"Filtered to {len(pairs)} pair(s) matching {ONLY}")
+    #ONLY = "agamidae_agama_atra_uf180711_07-t2"   # KW TO DO: quick patch, None = all fossils
+    #if ONLY:
+        #pairs = [pr for pr in pairs if os.path.basename(pr[0]).startswith(ONLY + "_fossil")]
+        #print(f"Filtered to {len(pairs)} pair(s) matching {ONLY}")
 
 else:
     with open(val_sum_fn, "r") as f:
@@ -135,7 +139,7 @@ if fast_mode:
                                                 log_path_csv=OUTDIR + "/trial_scores.csv",
                                                 label_dir=LABEL_DIR if fossils else None, 
                                                 ref_dir=base if fossils and perturbed else None, 
-                                                snap=SNAP)
+                                                snap=SNAP, select_by=SELECT_BY)
 else:   
     # Encode latent via 2 stage optimization (auto-decoder framework)
     best_cfg, trial_rows = grid_search(pairs, model, config, mean_latent, latent_codes, device, 
@@ -144,12 +148,23 @@ else:
                                         log_path_csv=OUTDIR + "/trial_scores.csv",
                                         label_dir=LABEL_DIR if fossils else None, 
                                         ref_dir=base if fossils and perturbed else None, 
-                                        snap=SNAP)
+                                        snap=SNAP, select_by=SELECT_BY)
+    
+best_cfg = load_best_cfg_from_csv(OUTDIR + "/trial_scores.csv", fast_mode, device, select_by=SELECT_BY)
+print(f"\n\nFinal inference cfg (from {OUTDIR}/trial_scores.csv, picked by {SELECT_BY}): {best_cfg}")
+
 # Build inference subset
 n_final = min(N_FINAL_INF, len(pairs))
 if n_final < N_FINAL_INF:
     print(f"\033[33mOnly {len(pairs)} pairs available; using all instead of {N_FINAL_INF}\033[0m")
-inf_subset = random.sample(pairs, n_final)
+    
+if fossils:
+    # Same specimens across fossil runs: sample from the fossilized/ list (same for every run), keep those this run has
+    master = sorted({os.path.basename(p).split("_fossil")[0] for p in glob.glob(os.path.join(LABEL_DIR, "*.vtk"))} & set(gt_paths))
+    keep = set(random.Random(0).sample(master, min(N_FINAL_INF, len(master))))
+    inf_subset = [pr for pr in pairs if os.path.basename(pr[0]).split("_fossil")[0] in keep]
+else:
+    inf_subset = random.sample(pairs, n_final)
 
 # Loop through meshes using best parameters from grid search
 best_summary_log = []
