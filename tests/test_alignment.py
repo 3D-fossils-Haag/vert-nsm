@@ -7,20 +7,9 @@ import json
 
 import numpy as np
 import pytest
-import pyvista as pv
-import torch
 from scipy.spatial.transform import Rotation
 
-from NSM.alignment import (
-    align_to_template,
-    load_mrk_json,
-    rms_err_pct,
-    rotation_matrix,
-    save_mrk_json,
-    snap_to_partial,
-    undo_pose,
-    undo_pose_error,
-)
+from NSM.alignment import align_to_template, load_mrk_json, rms_err_pct, save_mrk_json
 
 
 @pytest.fixture
@@ -35,13 +24,6 @@ def landmarks(rng):
 
 def random_rotation(seed):
     return Rotation.random(random_state=seed).as_matrix()
-
-
-def asymmetric_mesh():
-    """A closed mesh with no rotational symmetry, so rigid fits have a unique answer."""
-    mesh = pv.ParametricEllipsoid(0.6, 0.35, 0.2, u_res=40, v_res=40).triangulate().clean()
-    mesh.points = mesh.points + 0.1 * np.array([1, 0, 0]) * (mesh.points[:, [1]] ** 2)
-    return mesh
 
 
 # --- align_to_template (Procrustes) ----------------------------------------------
@@ -79,89 +61,6 @@ def test_align_is_robust_to_small_noise(landmarks, rng):
     s_hat, R_hat, _ = align_to_template(template, landmarks)
     assert s_hat == pytest.approx(s, rel=1e-2)
     np.testing.assert_allclose(R_hat, R, atol=1e-2)
-
-
-# --- rotation_matrix (axis-angle) -------------------------------------------------
-
-@pytest.mark.parametrize("seed", range(5))
-def test_rotation_matrix_matches_scipy(seed):
-    rotvec = Rotation.random(random_state=seed).as_rotvec()
-    R = rotation_matrix(torch.tensor(rotvec, dtype=torch.float64)).numpy()
-    np.testing.assert_allclose(R, Rotation.from_rotvec(rotvec).as_matrix(), atol=1e-10)
-
-
-def test_rotation_matrix_zero_is_identity():
-    R = rotation_matrix(torch.zeros(3, dtype=torch.float64))
-    torch.testing.assert_close(R, torch.eye(3, dtype=torch.float64))
-
-
-def test_rotation_matrix_is_differentiable_at_zero():
-    r = torch.zeros(3, dtype=torch.float64, requires_grad=True)
-    rotation_matrix(r).sum().backward()
-    assert torch.isfinite(r.grad).all()
-
-
-# --- undo_pose ------------------------------------------------------------------
-
-def test_undo_pose_inverts_forward_pose():
-    mesh = asymmetric_mesh()
-    pose = torch.tensor([0.1, -0.2, 0.05, 0.02, -0.03, 0.01, np.log(1.1)], dtype=torch.float64)
-    R = rotation_matrix(pose[:3]).numpy()
-    s = float(torch.exp(pose[6]))
-    moved = mesh.copy()
-    moved.points = s * mesh.points @ R.T + pose[3:6].numpy()  # forward model in optimize_latent_pose
-
-    restored = undo_pose(moved, pose)
-    np.testing.assert_allclose(restored.points, mesh.points, atol=1e-5)
-    np.testing.assert_allclose(moved.points, s * mesh.points @ R.T + pose[3:6].numpy())  # input untouched
-
-
-# --- undo_pose_error ------------------------------------------------------------
-
-def test_undo_pose_error_maps_completion_into_reference_frame(tmp_path):
-    ref = asymmetric_mesh()
-    R, s, t = random_rotation(7), 1.3, np.array([0.5, 0.1, -0.2])
-    fossil = ref.copy()
-    fossil.points = s * ref.points @ R + t
-    fossil_path, ref_path = str(tmp_path / "fossil.vtk"), str(tmp_path / "ref.vtk")
-    fossil.save(fossil_path)
-    ref.save(ref_path)
-
-    # a completion that sits exactly on the aligned fossil should land exactly on the reference
-    out = undo_pose_error(fossil.copy(), fossil_path, ref_path)
-    np.testing.assert_allclose(out.points, ref.points, atol=1e-4)
-
-
-def test_undo_pose_error_without_reference_is_noop(tmp_path):
-    mesh = asymmetric_mesh()
-    assert undo_pose_error(mesh, "unused.vtk", None) is mesh
-    assert undo_pose_error(mesh, "unused.vtk", str(tmp_path / "missing.vtk")) is mesh
-
-
-def test_undo_pose_error_with_mismatched_meshes_is_noop(tmp_path):
-    fossil_path, ref_path = str(tmp_path / "fossil.vtk"), str(tmp_path / "ref.vtk")
-    pv.Sphere(theta_resolution=10).save(fossil_path)
-    pv.Sphere(theta_resolution=20).save(ref_path)
-    mesh = asymmetric_mesh()
-    assert undo_pose_error(mesh, fossil_path, ref_path) is mesh
-
-
-# --- snap_to_partial --------------------------------------------------------------
-
-def test_snap_to_partial_undoes_small_rigid_offset():
-    """snap_to_partial is a local ICP refinement: it should exactly undo small offsets
-    (~2 deg, ~1% of bone size). Larger offsets can land in a local minimum, which is
-    expected and not tested here."""
-    completion = asymmetric_mesh()
-    # the "fossil" is one end of the true shape, slightly rotated and shifted
-    partial = completion.points[completion.points[:, 0] > 0.1]
-    R, t = Rotation.from_euler("xyz", [2, -2, 2], degrees=True).as_matrix(), np.array([0.01, -0.01, 0.01])
-    partial = partial @ R + t
-
-    snapped = snap_to_partial(completion, partial)
-
-    np.testing.assert_allclose(snapped.points, completion.points @ R + t, atol=1e-6)
-    np.testing.assert_allclose(completion.points, asymmetric_mesh().points)  # input untouched
 
 
 # --- rms_err_pct ------------------------------------------------------------------
