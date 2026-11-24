@@ -15,7 +15,7 @@ import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
 from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
 from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, grid_search, grid_search_pointnet, region_errors
-from NSM.fossils import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, POSE_LOW_COMPLETE, snap_to_partial, mask_broken_region
+from NSM.fossils import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, snap_to_partial, mask_broken_region
 # Monkey Patch into pymskt.mesh.meshes.Mesh
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
 meshes.Mesh.point_coords = property(fixed_point_coords)
@@ -40,15 +40,14 @@ downsample_experiment = False  # True = score every model on the run_v72 partial
 
 # Fossils
 fossils = True                 # True = score synthetic fossils against their intact meshes
-preprocessed = False           # True = preprocessed (smoothed, hole-filled) fossils; also masks broken SDF samples
-perturbed = False              # True = perturbed + realigned fossils
+preprocessed = True           # True = preprocessed (smoothed, hole-filled) fossils; also masks broken SDF samples
+perturbed = True              # True = perturbed + realigned fossils
 stage = "aligned_mw_lms_per_foss_cover"   # perturbed only:
                                #   "aligned"        = landmark alignment (align_model_to_ssm.py)
                                #   "aligned_mw_lms" = MorphoWeave, surface + landmarks
                                #   "aligned_mw_surf"= MorphoWeave, surface only
                                #   + "_per_foss_cover" for per-fossil coverage
-POSE_CORRECTION = True         # refine latent + small pose correction of the input points
-LOW_COMPLETE = False           # True = fossils < 50% complete (wider limits, 7 starts, 2x iterations)
+POSE_CORRECTION = False        # refine latent + small pose correction of the input points
 LABEL_DIR = "fossilized"       # raw fossils with the 'broken' labels used for scoring
 GT_PATH_FIX = ("/home/k.wolcott/", "/home/kaubricot/Downloads/")   # KW local patch: (old, new) prefix of GT paths, None on devbox
 ONLY = None                    # quick test: one specimen name, None = all
@@ -77,10 +76,10 @@ if fossils:
     MW_MODE = "lms" if "_lms" in stage else "surf"                 # mode column in the MorphoWeave pose log
     MW_LOG = (f"{perturb_dir}/pose_log_mw{'_per_foss_cover' if PER_FOSSIL_COV else ''}.csv"
               if perturbed and stage.startswith("aligned_mw") else None)
-    pose_cfg = POSE_LOW_COMPLETE if LOW_COMPLETE else POSE_STANDARD
+    pose_cfg = POSE_STANDARD
     OUTDIR += "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
     if POSE_CORRECTION:
-        OUTDIR += "_pose_low" if LOW_COMPLETE else "_pose"
+        OUTDIR += "_pose"
 if SNAP:
     OUTDIR += "_snap"
 if MASK_BROKEN:

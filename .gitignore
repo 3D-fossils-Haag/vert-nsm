@@ -25,3 +25,4 @@ __pycache__/
 .ipynb_checkpoints/
 nsm.egg-info/
 *.parquet
+segments/

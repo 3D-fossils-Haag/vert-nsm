@@ -5,6 +5,7 @@ align_fossil_morphoweave.py: align fossils to the atlas frame with MorphoWeave's
 
     python align_fossil_morphoweave.py perturbed/
     python align_fossil_morphoweave.py perturbed_preprocessed/
+    python align_fossil_morphoweave.py perturbed/ --reverse   # 2nd process from the end, logs to pose_log_mw*_rev.csv
 
 Reads <dir>/orig/models/*.vtk (+ <dir>/orig/lms/*.mrk.json from perturb_align_scale_fossils.py),
 writes <dir>/aligned_mw_surf/ (surface only) and <dir>/aligned_mw_lms/ (surface + landmarks), each with
@@ -61,7 +62,7 @@ def to_atlas(points, scale, rotation, translation):
     """Invert MorphoWeave's SSM->fossil similarity (x_f = s * x @ R + t) to bring the fossil into the SSM frame."""
     return (np.asarray(points, float) - translation) @ rotation.T / scale
 
-def main(perturb_dir):
+def main(perturb_dir, reverse=False):
     z = np.load(os.path.join(ATLAS_DIR, "ssm_model.npz"))
     mean, modes, eig = z["mean_shape"].astype(float), z["modes"].astype(float), z["eigenvalues"].astype(float)
     mean, modes = mean * RAS_TO_LPS, modes * RAS_TO_LPS[:, None]   # npz is RAS (Slicer); meshes and markups are LPS
@@ -75,11 +76,9 @@ def main(perturb_dir):
     mode_names = ["lms" if u else "surf" for u in USE_LANDMARKS]
     print(f"coverage from {FOSSIL_LOG}: {len(coverage)} fossils (others use {COVERAGE})" if PER_FOSSIL_COVERAGE
           else f"coverage {COVERAGE} for all fossils")
-    log_path = os.path.join(perturb_dir, f"pose_log_mw{suffix}.csv")
-    #log_path = os.path.join(perturb_dir, f"pose_log_mw{suffix}_rev.csv") # KW TO DO tmp rev run
+    log_path = os.path.join(perturb_dir, f"pose_log_mw{suffix}{'_rev' if reverse else ''}.csv")   # own log per run: no overwrites
     rows = pd.read_csv(log_path).to_dict("records") if os.path.exists(log_path) else []
-    for path in sorted(glob.glob(os.path.join(perturb_dir, "orig", "models", "*.vtk"))):
-    #for path in sorted(glob.glob(os.path.join(perturb_dir, "orig", "models", "*.vtk")), reverse=True): # KW TO DO tmp rev run
+    for path in sorted(glob.glob(os.path.join(perturb_dir, "orig", "models", "*.vtk")), reverse=reverse):
         fname = os.path.basename(path)
         stem = os.path.splitext(fname)[0]
         if all(os.path.exists(os.path.join(perturb_dir, f"aligned_mw_{m}{suffix}", "models", stem + "_align.vtk")) for m in mode_names):
@@ -132,4 +131,5 @@ def main(perturb_dir):
                   + f"({row['seconds']}s)", flush=True)
         pd.DataFrame(rows).to_csv(log_path, index=False)   # saved after each fossil
 if __name__ == "__main__":
-    main(sys.argv[1]) if len(sys.argv) == 2 else sys.exit(__doc__)
+    args = [a for a in sys.argv[1:] if a != "--reverse"]
+    main(args[0], reverse="--reverse" in sys.argv[1:]) if len(args) == 1 else sys.exit(__doc__)

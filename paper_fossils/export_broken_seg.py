@@ -6,6 +6,7 @@ the file a real user paints in Slicer.
  
     python paper_fossils/export_broken_seg.py fossilized/ fossilized_broken/
     python paper_fossils/export_broken_seg.py fossilized/ fossilized_broken/ --intact vertebrae_meshes/
+    python paper_fossils/export_broken_seg.py fossilized/ fossilized_broken/ --reverse   # 2nd process, from the end
  
 Labels come from the 'broken' label fossilize.py saves on each fossil. For fossils saved
 without it, pass --intact (the modern meshes, matched by name): each is fitted onto its
@@ -17,7 +18,8 @@ import os
 import nrrd
 import numpy as np
 import trimesh
-from scipy import ndimage
+from scipy import ndimage, sparse
+from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import cKDTree
  
 from fossilize import MESH_EXTS, load_mesh
@@ -25,38 +27,42 @@ from fossilize import MESH_EXTS, load_mesh
 TOL = 0.015      # --intact only: surface farther than this (x bone size) is broken
 VOXELS = 220     # voxels across the longest side (same as preprocess_fossilized.py)
 THICK = 4        # shell thickness either side of the surface, voxels
-GROW = 10        # grow the broken patches over the surface, voxels (rough painting spills over)
-SMOOTH = 5       # close gaps and round edges, voxels (brush-like patches)
+GROW = 10        # grow the broken patches along the surface, voxels (rough painting spills over)
+SMOOTH = 5       # close gaps and round edges along the surface, voxels (brush-like patches)
  
  
-def save_broken_seg(points, broken, path, voxels=220, thick=4, grow=0, smooth=0):
-    """Write a 'broken' segment: voxels within `thick` voxels of the surface whose nearest
-    vertex is broken, then grown `grow` voxels over the surface and smoothed (closing +
-    majority, `smooth` voxels) like a brush painting. Voxel size = longest side / `voxels`."""
-    points, broken = np.asarray(points, float), np.asarray(broken).astype(bool)
+def surface_dist(mesh, sources, limit):
+    """Geodesic (along mesh edges) distance from the source vertices, up to limit (inf beyond)."""
+    e, w = mesh.edges_unique, mesh.edges_unique_length
+    n = len(mesh.vertices)
+    G = sparse.coo_matrix((np.r_[w, np.zeros(len(sources))],                     # super-source n -> sources
+                           (np.r_[e[:, 0], np.full(len(sources), n)], np.r_[e[:, 1], sources])), shape=(n + 1, n + 1)).tocsr()
+    return dijkstra(G, directed=False, indices=n, limit=limit)[:n]
+
+def save_broken_seg(mesh, broken, path, voxels=220, thick=4, grow=0, smooth=0):
+    """Write a 'broken' segment like a brush painting: the broken vertices grown `grow` voxels and
+    smoothed (closing, `smooth` voxels) along the surface, so it never jumps across thin bone or
+    gaps; then voxels within `thick` of the surface whose nearest vertex is broken. Voxel size =
+    longest side / `voxels`."""
+    points, broken = np.asarray(mesh.vertices, float), np.asarray(broken).astype(bool)
     pitch = np.ptp(points, 0).max() / voxels
-    pad = thick + grow + smooth + 2
+    if grow or smooth:            # along the surface: never jumps across thin bone or gaps
+        sel = surface_dist(mesh, np.flatnonzero(broken), (grow + smooth) * pitch) <= (grow + smooth) * pitch
+        if smooth:
+            sel = ~(surface_dist(mesh, np.flatnonzero(~sel), smooth * pitch) <= smooth * pitch) if (~sel).any() else sel
+        broken = sel
+    pad = thick + 2
     origin = points.min(0) - pad * pitch
     shape = np.ceil((points.max(0) + pad * pitch - origin) / pitch).astype(int) + 1
-    near = np.zeros(shape, bool)                                   # voxels near the surface
+    near = np.zeros(shape, bool)
     near[tuple(np.round((points - origin) / pitch).astype(int).T)] = True
     near = ndimage.distance_transform_edt(~near) <= thick + 1
     ijk = np.argwhere(near)
     d, j = cKDTree(points).query(ijk * pitch + origin)
-    shell = np.zeros(shape, bool)
-    shell[tuple(ijk[d <= thick * pitch].T)] = True
-    seg = np.zeros(shape, bool)
-    seg[tuple(ijk[(d <= thick * pitch) & broken[j]].T)] = True
-    if grow:                                                       # spill over the rims
-        seg = ndimage.distance_transform_edt(~seg) <= grow
-    if smooth:                                                     # brush-like: close gaps, round edges
-        seg = ndimage.distance_transform_edt(ndimage.distance_transform_edt(~seg) <= smooth) > smooth
-        k = 2 * smooth + 1
-        seg = ndimage.uniform_filter(seg.astype(np.float32), size=k) > 0.5
-    seg = (seg & shell).astype(np.uint8)                           # stay on the surface
+    seg = np.zeros(shape, np.uint8)
+    seg[tuple(ijk[(d <= thick * pitch) & broken[j]].T)] = 1
     header = {"type": "uint8", "dimension": 3, "space": "left-posterior-superior",
-              "space directions": np.eye(3) * pitch, "space origin": origin,
-              "kinds": ["domain"] * 3, "encoding": "gzip",
+              "space directions": np.eye(3) * pitch, "space origin": origin, "kinds": ["domain"] * 3, "encoding": "gzip",
               "Segment0_ID": "broken", "Segment0_Name": "broken", "Segment0_Color": "1 0 0",
               "Segment0_LabelValue": "1", "Segment0_Layer": "0",
               "Segment0_Extent": " ".join(f"0 {n - 1}" for n in shape),
@@ -104,11 +110,15 @@ if __name__ == "__main__":
     p.add_argument("input", help="folder of fossil meshes")
     p.add_argument("output", help="output folder for <fossil name>.seg.nrrd")
     p.add_argument("--intact", help="folder of intact meshes, for fossils saved without a 'broken' label")
+    p.add_argument("--reverse", action="store_true", help="go through the files from the end (run alongside a forward run)")
     a = p.parse_args()
     os.makedirs(a.output, exist_ok=True)
-    for f in sorted(os.listdir(a.input)):
+    for f in sorted(os.listdir(a.input), reverse=a.reverse):
         stem, ext = os.path.splitext(f)
         if ext.lower() not in MESH_EXTS:
+            continue
+        out_path = os.path.join(a.output, stem + ".seg.nrrd")
+        if os.path.exists(out_path):                    # done already (this run, the other run, or an earlier one)
             continue
         mesh = load_mesh(os.path.join(a.input, f))
         if a.intact:                                    # match fossil "name_fossil..." to intact "name.*"
@@ -122,5 +132,5 @@ if __name__ == "__main__":
             if broken is None:
                 print(f"skip  {f}: no 'broken' label (pass --intact)")
                 continue
-        save_broken_seg(mesh.vertices, broken, os.path.join(a.output, stem + ".seg.nrrd"), VOXELS, THICK, GROW, SMOOTH)
+        save_broken_seg(mesh, broken, out_path, VOXELS, THICK, GROW, SMOOTH)
         print(f"ok    {f}: broken {100 * np.mean(broken):.1f}% of vertices")

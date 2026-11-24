@@ -58,9 +58,6 @@ def mask_broken_region(points, sdf_vals, mesh_path, center, max_radius, n_sample
 # plus fragment-normalization offsets; low-complete (<50%) allows more, with restarts and more iterations.
 POSE_STANDARD = dict(lr_pose=1e-3, lambda_pose=1e-2, max_rot_deg=12, max_trans=0.15, max_log_scale=0.15,
                      n_starts=1, start_rot_deg=0, iters_scale=1)
-POSE_LOW_COMPLETE = dict(lr_pose=2e-3, lambda_pose=1e-3, max_rot_deg=30, max_trans=0.35, max_log_scale=0.35,
-                         n_starts=7, start_rot_deg=15, iters_scale=2)
-
 
 def undo_pose_error(compl, fossil_path, ref_path):
     """Move a completion from the aligned fossil's frame into the ground truth frame, using the exact similarity

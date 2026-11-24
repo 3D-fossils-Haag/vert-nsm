@@ -15,7 +15,7 @@ import random
 from NSM.helper_funcs import load_config, load_model_and_latents, convert_ply_to_vtk, fixed_point_coords, safe_load_mesh_scalars 
 from NSM.optimization import normalize_mesh, get_norm_params, encode_latent, encode_latent_pointnet, reconstruct_mesh_from_latent, build_sdf_dataset, optimize_latent_partial
 from NSM.evaluation import strip_partial_mesh_name, build_partial_gt_mesh_pairs, uniform_surface_sample, chamfer_distance, load_best_cfg_from_csv, region_errors
-from NSM.fossils import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, POSE_LOW_COMPLETE, snap_to_partial, mask_broken_region
+from NSM.fossils import undo_pose_error, undo_pose, optimize_latent_pose, POSE_STANDARD, snap_to_partial, mask_broken_region
 
 # Monkey Patch into pymskt.mesh.meshes.Mesh
 meshes.Mesh.load_mesh_scalars = safe_load_mesh_scalars
@@ -44,7 +44,6 @@ stage = "aligned_mw_surf_per_foss_cover"   # perturbed only:
                                #   "aligned_mw_surf"= MorphoWeave, surface only
                                #   + "_per_foss_cover" for per-fossil coverage
 POSE_CORRECTION = True         # refine latent + small pose correction of the input points
-LOW_COMPLETE = False           # True = fossils < 50% complete (wider limits, 7 starts, 2x iterations)
 GRID_SPLIT = "train"           # split the grid search ran on
 LABEL_DIR = "fossilized"       # raw fossils with the 'broken' labels used for scoring
 GT_PATH_FIX = ("/home/k.wolcott/", "/home/kaubricot/Downloads/")   # KW local patch: (old, new) prefix of GT paths, None on devbox
@@ -70,10 +69,10 @@ if fossils:
     base = "fossilized_preprocessed" if preprocessed else LABEL_DIR   # unperturbed copies
     perturb_dir = "perturbed_preprocessed" if preprocessed else "perturbed"
     FOSSIL_DIR = f"{perturb_dir}/{stage}/models" if perturbed else base
-    pose_cfg = POSE_LOW_COMPLETE if LOW_COMPLETE else POSE_STANDARD
+    pose_cfg = POSE_STANDARD
     GRID_RUN += "_" + FOSSIL_DIR.rstrip("/").replace("/", "_")
     if POSE_CORRECTION:
-        GRID_RUN += "_pose_low" if LOW_COMPLETE else "_pose"
+        GRID_RUN += "_pose"
 if SNAP:
     GRID_RUN += "_snap"
 if MASK_BROKEN:
